@@ -122,19 +122,21 @@ mcp_servers:
 
 ## 4. 验证命令
 
-> 前提：第 0 节的 `npm run mock`（:4100）开着；第 2 节的 DeepSeek key 已是真 key。
+> 前提：第 0 节的 `npm run mock`（:4100）开着。**①② 不需要真 key；③④ 需要 `.env` 里 `OPENAI_API_KEY` 已是真 key。**
 
-**① 体检**
+**① 确认 scores MCP server 已挂上、两个工具被发现**（不需要模型/真 key，最直接）
 ```sh
-hermes doctor
+hermes mcp list          # 应看到 scores 一行，Status ✓ enabled
+hermes mcp test scores   # 应 ✓ Connected，并列出 get_today_scores / get_scores_range
 ```
+> 注意：`hermes doctor` 的「Tool Availability」只列**内置 toolset**，**不列 MCP 工具**——
+> MCP 是否挂上以 `hermes mcp list` / `hermes mcp test` 为准，别在 doctor 里找。
 
-**② 确认 Hermes 看得到这两个工具**（headless，纯文本输出）
+**② 体检（总体健康，可选）**
 ```sh
-hermes -z "List every tool you can call right now, one tool name per line."
-# 期望输出里包含：
-#   mcp_scores_get_today_scores
-#   mcp_scores_get_scores_range
+hermes doctor            # Python / 配置 / 连通性
+# 若提示 config 版本过旧（v22→v27），运行：hermes config migrate
+#   交互式、安全：只补新增的可选项并升版本号（建议先 hermes config check 预览）
 ```
 
 **③ 确认它真的调用工具取数并据此作答**（`chat -q` 会把工具调用/结果也显示在 transcript 里）
