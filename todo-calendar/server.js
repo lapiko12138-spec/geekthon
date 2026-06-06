@@ -93,10 +93,13 @@ app.post('/api/google/event', async (req, res) => {
     const cal = google.calendar({ version: 'v3', auth })
     const { date, todo } = req.body
     const colors = { P0: '11', P1: '6', P2: '1' }
+    const startEnd = todo.time
+      ? { start: { dateTime: `${date}T${todo.time}:00+08:00` },
+          end:   { dateTime: `${date}T${addOneHour(todo.time)}:00+08:00` } }
+      : { start: { date }, end: { date } }
     const body = {
       summary: `[${todo.priority}] ${todo.content}`,
-      start: { date },
-      end: { date },
+      ...startEnd,
       colorId: colors[todo.priority] || '1',
       extendedProperties: {
         private: { _todoId: todo.id, _todoPriority: todo.priority, _todoDone: String(todo.done) }
@@ -147,12 +150,16 @@ app.get('/api/google/events', async (req, res) => {
       privateExtendedProperty: ['_todoId']
     })
     res.json({
-      events: (r.data.items || []).map(e => ({
-        gcalId: e.id,
-        summary: e.summary || '',
-        date: e.start?.date,
-        props: e.extendedProperties?.private || {}
-      }))
+      events: (r.data.items || []).map(e => {
+        const dt = e.start?.dateTime
+        return {
+          gcalId: e.id,
+          summary: e.summary || '',
+          date: e.start?.date || (dt ? dt.slice(0, 10) : undefined),
+          time: dt ? dt.slice(11, 16) : null,
+          props: e.extendedProperties?.private || {}
+        }
+      })
     })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -160,20 +167,33 @@ app.get('/api/google/events', async (req, res) => {
 })
 
 // ── iCloud CalDAV ──────────────────────────────────────────────────
+function addOneHour(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number)
+  return `${String(Math.min(h + 1, 23)).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
 function makeICS(date, todo, icalId) {
   const dt = date.replace(/-/g, '')
-  const d = new Date(date)
-  d.setDate(d.getDate() + 1)
-  const dtNext = d.toISOString().slice(0, 10).replace(/-/g, '')
   const pMap = { P0: 1, P1: 5, P2: 9 }
-  // Escape special iCal characters in summary
   const summary = todo.content.replace(/[\\;,]/g, c => '\\' + c).replace(/\n/g, '\\n')
+  let dtstart, dtend
+  if (todo.time) {
+    const [hh, mm] = todo.time.split(':')
+    const endTime = addOneHour(todo.time).replace(':', '')
+    dtstart = `DTSTART;TZID=Asia/Shanghai:${dt}T${hh}${mm}00`
+    dtend   = `DTEND;TZID=Asia/Shanghai:${dt}T${endTime}00`
+  } else {
+    const d = new Date(date)
+    d.setDate(d.getDate() + 1)
+    const dtNext = d.toISOString().slice(0, 10).replace(/-/g, '')
+    dtstart = `DTSTART;VALUE=DATE:${dt}`
+    dtend   = `DTEND;VALUE=DATE:${dtNext}`
+  }
   return [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Todo-Calendar//EN', 'CALSCALE:GREGORIAN',
     'BEGIN:VEVENT',
     'UID:' + icalId,
-    'DTSTART;VALUE=DATE:' + dt,
-    'DTEND;VALUE=DATE:' + dtNext,
+    dtstart, dtend,
     'SUMMARY:[' + todo.priority + '] ' + summary,
     'STATUS:' + (todo.done ? 'COMPLETED' : 'CONFIRMED'),
     'PRIORITY:' + (pMap[todo.priority] || 9),
@@ -353,11 +373,15 @@ app.get('/api/caldav/events', async (req, res) => {
     const prefix = `${String(year).padStart(4,'0')}-${String(month).padStart(2,'0')}`
     const events = objects.map(o => {
       const p = parseICS(o.data)
-      const rawDate = (p['DTSTART;VALUE=DATE'] || p['DTSTART'] || '').slice(0, 8)
+      const rawDT = p['DTSTART'] || ''
+      const rawDate = rawDT.slice(0, 8)
       const date = rawDate.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
+      const timeMatch = rawDT.match(/T(\d{2})(\d{2})/)
+      const time = timeMatch ? `${timeMatch[1]}:${timeMatch[2]}` : null
       return {
         icalId: p['UID'],
         date,
+        time,
         summary: (p['SUMMARY'] || '').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\n/g, ' '),
         todoId: p['X-TODO-ID'] || null,
         done: p['STATUS'] === 'COMPLETED',
