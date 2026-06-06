@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "weread-dashboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/zhangjiahui/Documents/weread-dashboard/server/wereadServer.mjs"],
+      "port": 8788
+    }
+  ]
+}

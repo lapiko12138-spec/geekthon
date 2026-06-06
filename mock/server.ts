@@ -4,9 +4,8 @@ import type { Scores, PetState, MetricScore } from '../types/contract';
 const app = express();
 app.use(express.json());
 
-// CORS: allow the AIRI web pet (a different origin, e.g. http://localhost:5173)
-// to poll this service from the browser. Read-only mock data, so a permissive
-// policy is fine for the MVP.
+// CORS: allow browser/webview clients (desktop pet, dashboard) to poll this
+// service. Mock data, so a permissive policy is fine for the MVP.
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -18,37 +17,112 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// In-memory store keyed by "YYYY-MM-DD"
-const store = new Map<string, Scores>();
+// ── Scoring config — the "评分服务" (all thresholds tunable here) ─────────────
+const GOAL_STEPS = 8000; //        daily exercise goal (steps)
+const GOAL_READING_MIN = 30; //    daily reading goal (minutes)
+const SCREEN_BUDGET_HR = 4; //     healthy daily screen budget (hours)
+const EXERCISE_LOW = 0.25; //      exercise.value below this → angry (~steps < 2000)
+const SCREEN_SEVERE = 0.3; //      screen.value at/below this → eyestrain (heavy overuse)
+const READING_2H_MIN = 120; //     reading achievement threshold (minutes)
+const NIGHT_START = 22; //         hour ≥ 22 → resting
+const NIGHT_END = 6; //            hour < 6  → resting
+
+const PET_STATES: PetState[] = [
+  'thriving',
+  'good',
+  'slacking',
+  'resting',
+  'angry',
+  'eyestrain',
+  'sick',
+];
+
+// ── Raw daily signals (what real collectors would feed the scorer) ───────────
+interface RawDay {
+  steps: number;
+  readingMin: number;
+  screenHr: number;
+  workoutDone: boolean;
+  healthAnomaly: boolean; // health vitals out of range (source TBD; here a manual flag)
+  forceState?: PetState; // DEV-ONLY: directly set petState for demos (bypasses the rule)
+}
+const DEFAULT_RAW: RawDay = {
+  steps: 8000,
+  readingMin: 20,
+  screenHr: 2,
+  workoutDone: false,
+  healthAnomaly: false,
+};
+
+// In-memory raw store keyed by "YYYY-MM-DD"
+const rawStore = new Map<string, RawDay>();
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
 }
-
-function makeMetric(value: number): MetricScore {
+// "More is better" metric: value = progress / goal (capped at 1.0).
+function metric(value: number): MetricScore {
   const v = clamp01(value);
   return { value: v, goalMet: v >= 1.0 };
 }
-
-// CONTRACT §3.3 — priority order, first match wins
-function derivePetState(exercise: MetricScore, reading: MetricScore): PetState {
-  const hour = new Date().getHours();
-  if (hour >= 22 || hour < 6) return 'resting';           // nighttime
-  if (exercise.goalMet && reading.goalMet) return 'thriving';
-  if (exercise.goalMet || reading.goalMet) return 'good';
-  return 'slacking';
+// Screen is "less is better": invert raw hours into a healthiness value.
+// ≤ budget → 1.0; linearly down to 0 at 2× budget. Higher value = healthier.
+function screenMetric(usageHr: number): MetricScore {
+  const v =
+    usageHr <= SCREEN_BUDGET_HR
+      ? 1.0
+      : clamp01((2 * SCREEN_BUDGET_HR - usageHr) / SCREEN_BUDGET_HR);
+  return { value: v, goalMet: usageHr <= SCREEN_BUDGET_HR };
+}
+function isNight(): boolean {
+  const h = new Date().getHours();
+  return h >= NIGHT_START || h < NIGHT_END;
 }
 
-function buildScores(date: string, exVal: number, rdVal: number): Scores {
-  const exercise = makeMetric(exVal);
-  const reading  = makeMetric(rdVal);
+// CONTRACT §3.3 (v2) — priority order, first match wins.
+function derivePetState(
+  exercise: MetricScore,
+  reading: MetricScore,
+  screen: MetricScore,
+  healthAnomaly: boolean,
+): PetState {
+  if (healthAnomaly) return 'sick'; //                                  1 vitals abnormal
+  if (isNight()) return 'resting'; //                                   2 night / no data
+  if (exercise.value < EXERCISE_LOW) return 'angry'; //                 3 moved almost nothing
+  if (screen.value <= SCREEN_SEVERE) return 'eyestrain'; //            4 screen heavily over budget
+  if (exercise.goalMet && reading.goalMet && screen.goalMet) {
+    return 'thriving'; //                                               5 all good
+  }
+  if (exercise.goalMet || reading.goalMet) return 'good'; //            6 at least one
+  return 'slacking'; //                                                 7 nothing met
+}
+
+// Cumulative achievements reached today (the pet diffs NEW ones → celebrate).
+function computeAchievements(raw: RawDay): string[] {
+  const a: string[] = [];
+  if (raw.steps >= GOAL_STEPS) a.push('steps_goal');
+  if (raw.workoutDone) a.push('workout_done');
+  if (raw.readingMin >= GOAL_READING_MIN) a.push('reading_goal');
+  if (raw.readingMin >= READING_2H_MIN) a.push('reading_2h');
+  return a;
+}
+
+function buildScores(date: string, raw: RawDay): Scores {
+  const exercise = metric(raw.steps / GOAL_STEPS);
+  const reading = metric(raw.readingMin / GOAL_READING_MIN);
+  const screen = screenMetric(raw.screenHr);
+  const petState =
+    raw.forceState && PET_STATES.includes(raw.forceState)
+      ? raw.forceState // DEV override
+      : derivePetState(exercise, reading, screen, raw.healthAnomaly);
   return {
     date,
     exercise,
     reading,
-    petState: derivePetState(exercise, reading),
+    screen,
+    petState,
+    achievements: computeAchievements(raw),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -56,12 +130,12 @@ function buildScores(date: string, exVal: number, rdVal: number): Scores {
 function todayStr(): string {
   return new Date().toISOString().split('T')[0];
 }
-
-function getOrCreate(date: string): Scores {
-  if (!store.has(date)) {
-    store.set(date, buildScores(date, 0.5, 0.5));
-  }
-  return store.get(date)!;
+function getRaw(date: string): RawDay {
+  if (!rawStore.has(date)) rawStore.set(date, { ...DEFAULT_RAW });
+  return rawStore.get(date)!;
+}
+function scoresFor(date: string): Scores {
+  return buildScores(date, getRaw(date));
 }
 
 // Timezone-safe date iteration using UTC arithmetic
@@ -77,13 +151,10 @@ function datesInRange(start: string, end: string): string[] {
 }
 
 // ── routes ────────────────────────────────────────────────────────────────────
-
-// GET /scores/today
 app.get('/scores/today', (_req: Request, res: Response) => {
-  res.json(getOrCreate(todayStr()));
+  res.json(scoresFor(todayStr()));
 });
 
-// GET /scores/range?start=YYYY-MM-DD&end=YYYY-MM-DD
 app.get('/scores/range', (req: Request, res: Response) => {
   const { start, end } = req.query as { start?: string; end?: string };
   const iso = /^\d{4}-\d{2}-\d{2}$/;
@@ -99,33 +170,45 @@ app.get('/scores/range', (req: Request, res: Response) => {
     res.status(400).json({ error: 'start must be <= end' });
     return;
   }
-  res.json(datesInRange(start, end).map(getOrCreate));
+  res.json(datesInRange(start, end).map(scoresFor));
 });
 
-// POST /scores/today
-// Accepts { exercise?: { value: number }, reading?: { value: number } }
-// Ignores petState in body — always recomputed by rule.
-// Values are clamped to [0, 1] before storage.
+// POST /scores/today — feed RAW signals; the scorer recomputes everything.
+// Body (all optional, merged onto today's raw):
+//   steps, readingMin, screenHr  (numbers)
+//   workoutDone, healthAnomaly   (booleans)
+//   forceState                   (DEV-only: set petState directly for demos;
+//                                 send null to clear the override)
+// Any petState/metrics in the body are ignored — the scorer owns them.
 app.post('/scores/today', (req: Request, res: Response) => {
-  const body = req.body ?? {};
+  const body = (req.body ?? {}) as Record<string, unknown>;
   const date = todayStr();
-  const prev = getOrCreate(date);
+  const raw = getRaw(date);
 
-  const exVal = typeof body?.exercise?.value === 'number'
-    ? body.exercise.value
-    : prev.exercise.value;
-  const rdVal = typeof body?.reading?.value === 'number'
-    ? body.reading.value
-    : prev.reading.value;
+  if (typeof body.steps === 'number') raw.steps = Math.max(0, body.steps);
+  if (typeof body.readingMin === 'number') {
+    raw.readingMin = Math.max(0, body.readingMin);
+  }
+  if (typeof body.screenHr === 'number') raw.screenHr = Math.max(0, body.screenHr);
+  if (typeof body.workoutDone === 'boolean') raw.workoutDone = body.workoutDone;
+  if (typeof body.healthAnomaly === 'boolean') {
+    raw.healthAnomaly = body.healthAnomaly;
+  }
+  if (
+    typeof body.forceState === 'string' &&
+    (PET_STATES as string[]).includes(body.forceState)
+  ) {
+    raw.forceState = body.forceState as PetState;
+  } else if (body.forceState === null) {
+    delete raw.forceState; // clear the dev override
+  }
 
-  const updated = buildScores(date, exVal, rdVal);
-  store.set(date, updated);
-  res.json(updated);
+  rawStore.set(date, raw);
+  res.json(buildScores(date, raw));
 });
 
 // ── start ─────────────────────────────────────────────────────────────────────
-
 const PORT = 4100;
 app.listen(PORT, () => {
-  console.log(`Mock scores server → http://localhost:${PORT}`);
+  console.log(`Mock scores server (v2) → http://localhost:${PORT}`);
 });
