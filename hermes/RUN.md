@@ -59,27 +59,32 @@ hermes setup
 # → 模型选 deepseek-v4-pro
 ```
 
-### 方式 B（手动写配置文件，等价于上面）
+### 方式 B（手动写配置文件）
+
+`hermes setup` 走「通用 OpenAI 兼容」端点时，会把 DeepSeek 写成 `provider: openai-api`
+（**本机当前就是这种**）。此时 **key 字段是 `OPENAI_API_KEY`，不是 `DEEPSEEK_API_KEY`**。
 
 `~/.hermes/config.yaml`：
 
 ```yaml
 model:
-  provider: deepseek
-  default: deepseek-v4-pro        # 经典别名 deepseek-chat 亦可
-  base_url: https://api.deepseek.com
+  provider: openai-api                    # 通用 OpenAI 兼容 provider
+  default: deepseek-chat
+  base_url: https://api.deepseek.com/v1   # 注意带 /v1
 ```
 
 `~/.hermes/.env`（**占位 key，别写真 key**；真 key 自己换上、勿提交版本库）：
 
 ```dotenv
-# DeepSeek 云端 API key —— 从 https://platform.deepseek.com/api_keys 获取
-DEEPSEEK_API_KEY=sk-REPLACE_WITH_YOUR_DEEPSEEK_KEY
+# DeepSeek key —— provider 为 openai-api 时用这个字段
+OPENAI_API_KEY=sk-REPLACE_WITH_YOUR_DEEPSEEK_KEY
 ```
 
-> **纯「OpenAI 兼容」写法（备选）**：若想走通用自定义端点而非一等 provider，可写
-> `provider: custom` + `base_url: https://api.deepseek.com/v1`，key 仍放 `.env` 的 `DEEPSEEK_API_KEY`。
-> 二选一即可；本项目默认用上面的一等 `deepseek` provider。
+> **关键：key 字段由 `model.provider` 决定，别填错：**
+> - `provider: openai-api`（base_url `…/v1`）→ key 放 **`OPENAI_API_KEY`**（本机当前用法）
+> - `provider: deepseek`（一等 provider，base_url `https://api.deepseek.com`）→ key 放 `DEEPSEEK_API_KEY`
+>
+> 填错字段会导致模型鉴权失败。改完 config.yaml 后可用 `hermes model` 复核当前 provider。
 
 验证模型连通（需 .env 里已是真 key）：
 
