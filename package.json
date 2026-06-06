@@ -7,7 +7,7 @@
     "doc": "docs"
   },
   "scripts": {
-    "mock": "ts-node mock/server.ts",
+    "mock": "tsx mock/server.ts",
     "mcp": "tsx mcp/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
