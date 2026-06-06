@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["types/**/*.ts", "mock/**/*.ts", "mcp/**/*.ts"]
+  "include": ["types/**/*.ts", "mock/**/*.ts", "mcp/**/*.ts", "scripts/**/*.ts"]
 }

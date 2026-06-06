@@ -10,6 +10,7 @@
     "mock": "tsx mock/server.ts",
     "mcp": "tsx mcp/server.ts",
     "mcp:world": "tsx mcp/world-server.ts",
+    "sync": "tsx scripts/sync-real-data.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

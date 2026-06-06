@@ -195,6 +195,75 @@ server.registerTool(
   },
 );
 
+// ── Calendar (iCloud / CalDAV via the todo-calendar service on :3456) ────────
+const CAL_BASE = process.env.CALENDAR_URL || "http://localhost:3456";
+async function fetchCalMonth(
+  year: number,
+  month: number,
+): Promise<{ events: { date: string; summary: string; done?: boolean; priority?: string }[]; calName?: string }> {
+  const url = `${CAL_BASE}/api/caldav/events?year=${year}&month=${String(month).padStart(2, "0")}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`calendar HTTP ${res.status}`);
+  return (await res.json()) as {
+    events: { date: string; summary: string; done?: boolean; priority?: string }[];
+    calName?: string;
+  };
+}
+server.registerTool(
+  "get_calendar_today",
+  {
+    description:
+      "今日及近期日历安排（iCloud 日历）。返回今天的事件 + 接下来几天的安排。" +
+      "用户问今天有什么安排/接下来要做什么/有没有日程/某天有什么事时调用。",
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  async () => {
+    try {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = now.getMonth() + 1;
+      const d = now.getDate();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const todayStr = `${y}-${pad(m)}-${pad(d)}`;
+      const cur = await fetchCalMonth(y, m);
+      const ny = m === 12 ? y + 1 : y;
+      const nm = m === 12 ? 1 : m + 1;
+      let nextEvents: { date: string; summary: string }[] = [];
+      try {
+        nextEvents = (await fetchCalMonth(ny, nm)).events;
+      } catch {
+        // next month best-effort
+      }
+      const seen = new Set<string>();
+      const all = [...(cur.events ?? []), ...nextEvents].filter((e) => {
+        const k = `${e.date}|${e.summary}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      const today = all
+        .filter((e) => e.date === todayStr)
+        .map((e) => ({ summary: e.summary }));
+      const upcoming = all
+        .filter((e) => e.date > todayStr)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(0, 8)
+        .map((e) => ({ date: e.date, summary: e.summary }));
+      return jsonText({
+        date: todayStr,
+        calendar: cur.calName ?? "iCloud",
+        today_count: today.length,
+        today,
+        upcoming,
+      });
+    } catch (e) {
+      return errText(
+        `calendar error: ${String(e)} (todo-calendar :3456 在跑吗？iCloud 连了吗？)`,
+      );
+    }
+  },
+);
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
