@@ -33,7 +33,9 @@ for (const r of MAP.rowOrder) {
   FRAMES_BY_ROW[r.row] = r.frames;
 }
 
-const FRAME_MS = 130; // per-frame duration (no per-frame timing in the map)
+const AMBIENT_CYCLE_MS = 1800; // one gentle play-through of an ambient (petState) animation
+const ONESHOT_CYCLE_MS = 1100; // celebrate / alert / waving play-through
+const IDLE_REANIM_MS = 5 * 60 * 1000; // ambient holds still, replays one cycle every ~5 min
 const DISPLAY_H = 150; // on-screen height of one cell (px)
 
 // ── Endpoints (all via Tauri http plugin → no browser CORS) ──────────────────
@@ -66,10 +68,17 @@ pet.style.backgroundImage = `url(${atlasUrl})`;
 pet.style.backgroundSize = `${MAP.width * scale}px ${MAP.height * scale}px`;
 
 let frameTimer: number | undefined;
-function stopAnim() {
+let idleTimer: number | undefined;
+function stopFrames() {
   if (frameTimer !== undefined) {
     clearInterval(frameTimer);
     frameTimer = undefined;
+  }
+}
+function clearIdle() {
+  if (idleTimer !== undefined) {
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
   }
 }
 function showCell(row: number, col: number) {
@@ -77,28 +86,44 @@ function showCell(row: number, col: number) {
     row * MAP.cellHeight * scale
   }px`;
 }
-function playRow(row: number, loop: boolean, onDone?: () => void) {
-  stopAnim();
+// Play frames 0..n-1 once, then HOLD the last (settled) frame — no constant looping.
+function playCycle(row: number, cycleMs: number, onDone?: () => void) {
+  stopFrames();
   const frames = FRAMES_BY_ROW[row] || 1; // only real frames — never the blank trailing cells
-  let i = 0;
-  showCell(row, 0);
   if (frames <= 1) {
-    if (!loop) onDone?.();
+    showCell(row, 0);
+    onDone?.();
     return;
   }
+  const frameMs = Math.max(110, Math.round(cycleMs / frames));
+  let i = 0;
+  showCell(row, 0);
   frameTimer = window.setInterval(() => {
     i += 1;
     if (i >= frames) {
-      if (loop) {
-        i = 0;
-      } else {
-        stopAnim();
-        onDone?.();
-        return;
-      }
+      stopFrames();
+      showCell(row, frames - 1); // settle and hold the last frame
+      onDone?.();
+      return;
     }
     showCell(row, i);
-  }, FRAME_MS);
+  }, frameMs);
+}
+// Continuous loop — only for the brief "thinking" state while awaiting a reply.
+function playLoop(row: number, cycleMs: number) {
+  stopFrames();
+  const frames = FRAMES_BY_ROW[row] || 1;
+  if (frames <= 1) {
+    showCell(row, 0);
+    return;
+  }
+  const frameMs = Math.max(110, Math.round(cycleMs / frames));
+  let i = 0;
+  showCell(row, 0);
+  frameTimer = window.setInterval(() => {
+    i = (i + 1) % frames;
+    showCell(row, i);
+  }, frameMs);
 }
 
 // ── State controller — priority: one-shot > thinking > ambient(petState) ─────
@@ -106,23 +131,38 @@ let ambientRow = MAP.petStateToRow["resting"];
 let thinking = false;
 let overriding = false;
 
+// Ambient = play one gentle cycle, hold the settled frame, then re-animate once
+// every IDLE_REANIM_MS. A desktop pet should mostly rest still, not loop forever.
+function startAmbient() {
+  clearIdle();
+  playCycle(ambientRow, AMBIENT_CYCLE_MS);
+  const tick = () => {
+    if (!overriding && !thinking) playCycle(ambientRow, AMBIENT_CYCLE_MS);
+    idleTimer = window.setTimeout(tick, IDLE_REANIM_MS);
+  };
+  idleTimer = window.setTimeout(tick, IDLE_REANIM_MS);
+}
 function resolve() {
   if (overriding) return; // a one-shot is playing; it resolves on its own onDone
+  clearIdle();
   if (thinking) {
-    playRow(ROW_BY_ID["review"].row, true);
+    playLoop(ROW_BY_ID["review"].row, ONESHOT_CYCLE_MS);
     return;
   }
-  playRow(ambientRow, true);
+  startAmbient();
 }
 function setPetState(s: string) {
   if (!(s in MAP.petStateToRow)) return;
-  ambientRow = MAP.petStateToRow[s];
+  const row = MAP.petStateToRow[s];
+  if (row === ambientRow) return; // unchanged → don't restart (poll runs every 5s)
+  ambientRow = row;
   if (!overriding && !thinking) resolve();
 }
 function playOnce(id: string) {
   if (!(id in ROW_BY_ID)) return;
   overriding = true;
-  playRow(ROW_BY_ID[id].row, false, () => {
+  clearIdle();
+  playCycle(ROW_BY_ID[id].row, ONESHOT_CYCLE_MS, () => {
     overriding = false;
     resolve(); // back to current petState (or thinking) row
   });
