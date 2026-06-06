@@ -24,6 +24,8 @@ server.registerTool(
       'petState: "thriving"|"good"|"slacking"|"resting", updatedAt: ISO8601 }. ' +
       "Call this when the user asks about today's exercise or reading progress, " +
       "the pet's current state, or whether daily goals were met.",
+    // Read-only: this tool only queries data, never mutates it.
+    annotations: { readOnlyHint: true, destructiveHint: false },
   },
   async () => {
     try {
@@ -56,6 +58,8 @@ server.registerTool(
       start: z.string().describe('Start date in YYYY-MM-DD format (inclusive)'),
       end: z.string().describe('End date in YYYY-MM-DD format (inclusive)'),
     },
+    // Read-only: this tool only queries data, never mutates it.
+    annotations: { readOnlyHint: true, destructiveHint: false },
   },
   async ({ start, end }) => {
     try {
