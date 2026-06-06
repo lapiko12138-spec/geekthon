@@ -7,5 +7,5 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "include": ["types/**/*.ts"]
+  "include": ["types/**/*.ts", "mock/**/*.ts"]
 }
