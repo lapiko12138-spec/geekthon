@@ -3,3 +3,4 @@ node_modules/
 .sync-state.json
 *.log
 .DS_Store
+todos.json

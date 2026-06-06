@@ -10,6 +10,7 @@ const { google } = require('googleapis')
 const app = express()
 const PORT = process.env.PORT || 3456
 const STATE_FILE = path.join(__dirname, '.sync-state.json')
+const TODOS_FILE = path.join(__dirname, 'todos.json')
 
 app.use(cors())
 app.use(express.json())
@@ -24,6 +25,28 @@ function saveState(patch) {
   const s = loadState()
   fs.writeFileSync(STATE_FILE, JSON.stringify({ ...s, ...patch }, null, 2))
 }
+
+// ── Todo persistence ───────────────────────────────────────────────
+function loadTodos() {
+  try { return JSON.parse(fs.readFileSync(TODOS_FILE, 'utf8')) }
+  catch { return {} }
+}
+function saveTodos(data) {
+  fs.writeFileSync(TODOS_FILE, JSON.stringify(data, null, 2))
+}
+
+app.get('/api/todos', (req, res) => {
+  res.json({ todos: loadTodos() })
+})
+
+app.post('/api/todos', (req, res) => {
+  try {
+    saveTodos(req.body.todos || {})
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
 
 // ── Status ─────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
