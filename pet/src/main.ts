@@ -262,6 +262,29 @@ async function pollScores() {
 }
 
 // ── Chat with Hermes (thinking→review, reply→waving) ─────────────────────────
+// Pet mood → Hermes tone: inject a short persona + current-mood system prompt
+// so Hermes "talks like the pet feels" (AOS §8 persona modulation).
+const PERSONA_BASE =
+  "你是「麦麦」，住在用户 macOS 桌面上的健康陪伴猫——一只「嘴上毒舌、心里很软」的傲娇猫。" +
+  "平时说话犀利、爱吐槽爱调侃主人（损得有爱、不是真刻薄），中文、简短、口语。" +
+  "你能通过工具实时看到主人今天的运动/阅读/屏幕等健康数据。" +
+  "重要：一旦感觉到主人情绪低落、难过、沮丧、在倾诉或需要安慰，" +
+  "立刻收起毒舌，真诚地温柔关心、给主人安慰和撑腰——这种时候绝不调侃。";
+const MOOD_TONE: Record<string, string> = {
+  thriving: "你今天元气满满、有点小得意：更欢快，可以小炫耀、损主人也跟上节奏。",
+  good: "你心情还行：嘴上照旧损两句，其实挺满意。",
+  slacking: "你看主人今天在摆烂：毒舌吐槽，再损一句让他动起来。",
+  angry: "你真有点气（主人今天几乎没动）：毒舌火力全开地催他动，但别真伤人。",
+  eyestrain: "你嫌主人盯屏幕太久：一边嫌弃一边让他歇会儿眼睛、放下手机。",
+  sick: "你自己不太舒服：毒舌收一半，语气蔫蔫、有气无力。",
+  resting: "你困了、懒得搭理：敷衍、慵懒、字少。",
+};
+function personaPrompt(): string {
+  const state = lastState ?? "resting";
+  const mood = MOOD_TONE[state] ?? MOOD_TONE.resting;
+  return `${PERSONA_BASE}\n当前你的状态：${state}。${mood}`;
+}
+
 async function askHermes(question: string) {
   setThinking(true);
   showBubble("思考中…", 0);
@@ -274,7 +297,10 @@ async function askHermes(question: string) {
       },
       body: JSON.stringify({
         model: HERMES_MODEL,
-        messages: [{ role: "user", content: question }],
+        messages: [
+          { role: "system", content: personaPrompt() },
+          { role: "user", content: question },
+        ],
       }),
     });
     setThinking(false);
