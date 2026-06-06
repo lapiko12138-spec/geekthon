@@ -30,7 +30,11 @@ app.get('/api/status', (req, res) => {
   const s = loadState()
   res.json({
     google: { connected: !!(s.googleTokens && process.env.GOOGLE_CLIENT_ID) },
-    caldav: { connected: !!(s.caldavUser && s.caldavPass && s.caldavCalUrl) }
+    caldav: {
+      connected: !!(s.caldavUser && s.caldavPass && s.caldavCalUrl),
+      user: s.caldavUser || null,
+      calUrl: s.caldavCalUrl || null
+    }
   })
 })
 
@@ -180,16 +184,30 @@ function makeICS(date, todo, icalId) {
 
 function parseICS(str) {
   const r = {}
+  let inVEvent = false
   ;(str || '').replace(/\r\n[ \t]/g, '').split(/\r\n|\n/).forEach(line => {
+    const t = line.trim()
+    if (t === 'BEGIN:VEVENT') { inVEvent = true; return }
+    if (t === 'END:VEVENT') { inVEvent = false; return }
+    if (!inVEvent) return
     const m = line.match(/^([^:]+):(.*)$/)
-    if (m) r[m[1].trim()] = m[2].trim()
+    if (!m) return
+    const key = m[1].trim(), val = m[2].trim()
+    r[key] = val
+    // Also index by base name so DTSTART;TZID=... is accessible as DTSTART
+    const base = key.split(';')[0]
+    if (base !== key && !r[base]) r[base] = val
   })
   return r
 }
 
 // Connect iCloud via CalDAV (uses tsdav for discovery)
+// password is optional: if omitted, reuse the previously saved password
 app.post('/api/caldav/connect', async (req, res) => {
-  const { username, password } = req.body
+  const s = loadState()
+  const username = req.body.username
+  const password = req.body.password || s.caldavPass  // reuse saved if not provided
+  if (!username || !password) return res.status(400).json({ error: '请提供 Apple ID 和应用专用密码' })
   try {
     const { createDAVClient } = require('tsdav')
     const client = await createDAVClient({
@@ -200,8 +218,11 @@ app.post('/api/caldav/connect', async (req, res) => {
     })
     const cals = await client.fetchCalendars()
     if (!cals.length) throw new Error('未找到任何日历')
-    // Prefer a calendar that isn't reminders
-    const defCal = cals.find(c => !/remind/i.test(c.url) && !/task/i.test(c.url)) || cals[0]
+    // Prefer "日历" (Home) > any non-reminders > first
+    const defCal =
+      cals.find(c => c.displayName === '日历' || c.displayName === 'Calendar') ||
+      cals.find(c => !/remind/i.test(c.url + (c.displayName || '')) && !/task/i.test(c.url)) ||
+      cals[0]
     const calUrl = defCal.url.endsWith('/') ? defCal.url : defCal.url + '/'
     saveState({
       caldavUser: username,
@@ -212,6 +233,31 @@ app.post('/api/caldav/connect', async (req, res) => {
     res.json({ ok: true, calendars: cals.map(c => ({ url: c.url, name: c.displayName || c.url })) })
   } catch (e) {
     res.status(400).json({ error: e.message })
+  }
+})
+
+// Debug: show raw event count + samples from current calendar
+app.get('/api/caldav/test-events', async (req, res) => {
+  const s = loadState()
+  if (!s.caldavUser) return res.status(401).json({ error: 'not connected' })
+  try {
+    const { createDAVClient } = require('tsdav')
+    const client = await createDAVClient({
+      serverUrl: 'https://caldav.icloud.com',
+      credentials: { username: s.caldavUser, password: s.caldavPass },
+      authMethod: 'Basic',
+      defaultAccountType: 'caldav'
+    })
+    const cals = await client.fetchCalendars()
+    const cal = cals.find(c => c.url === s.caldavCalUrl || c.url + '/' === s.caldavCalUrl) || cals[0]
+    const objects = await client.fetchCalendarObjects({ calendar: cal })
+    const samples = objects.slice(0, 5).map(o => {
+      const p = parseICS(o.data)
+      return { summary: p['SUMMARY'], date: p['DTSTART;VALUE=DATE'] || p['DTSTART'], uid: p['UID'] }
+    })
+    res.json({ calName: cal.displayName, calUrl: cal.url, total: objects.length, samples })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
   }
 })
 
@@ -252,7 +298,34 @@ app.delete('/api/caldav/event/:icalId', async (req, res) => {
   }
 })
 
-// Pull our todo events from iCloud for a month
+// List available calendars (for UI picker)
+app.get('/api/caldav/calendars', async (req, res) => {
+  const s = loadState()
+  if (!s.caldavUser) return res.status(401).json({ error: 'iCloud not connected' })
+  try {
+    const { createDAVClient } = require('tsdav')
+    const client = await createDAVClient({
+      serverUrl: 'https://caldav.icloud.com',
+      credentials: { username: s.caldavUser, password: s.caldavPass },
+      authMethod: 'Basic',
+      defaultAccountType: 'caldav'
+    })
+    const cals = await client.fetchCalendars()
+    res.json({ calendars: cals.map(c => ({ url: c.url, name: c.displayName || c.url, active: c.url === s.caldavCalUrl || c.url + '/' === s.caldavCalUrl })) })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Switch active calendar
+app.post('/api/caldav/set-calendar', (req, res) => {
+  const { url } = req.body
+  const calUrl = url.endsWith('/') ? url : url + '/'
+  saveState({ caldavCalUrl: calUrl })
+  res.json({ ok: true })
+})
+
+// Pull ALL events from iCloud for a month (not just ones created by this app)
 app.get('/api/caldav/events', async (req, res) => {
   const s = loadState()
   if (!s.caldavCalUrl) return res.status(401).json({ error: 'iCloud not connected' })
@@ -267,20 +340,32 @@ app.get('/api/caldav/events', async (req, res) => {
     const cals = await client.fetchCalendars()
     const cal = cals.find(c => c.url === s.caldavCalUrl || c.url + '/' === s.caldavCalUrl) || cals[0]
     const { year, month } = req.query
-    const objects = await client.fetchCalendarObjects({
-      calendar: cal,
-      timeRange: {
-        start: new Date(+year, +month - 1, 1).toISOString(),
-        end: new Date(+year, +month, 0, 23, 59, 59).toISOString()
-      }
+
+    // Fetch from ALL non-reminders calendars and merge
+    const syncCals = cals.filter(c => {
+      const name = (c.displayName || '').toLowerCase()
+      const url = (c.url || '').toLowerCase()
+      return !name.includes('提醒') && !name.includes('remind') && !url.includes('remind')
     })
+    const chunks = await Promise.all(syncCals.map(c => client.fetchCalendarObjects({ calendar: c })))
+    const objects = chunks.flat()
+
+    const prefix = `${String(year).padStart(4,'0')}-${String(month).padStart(2,'0')}`
     const events = objects.map(o => {
       const p = parseICS(o.data)
-      const rawDate = p['DTSTART;VALUE=DATE'] || p['DTSTART'] || ''
-      const date = rawDate.slice(0, 8).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
-      return { icalId: p['UID'], date, summary: p['SUMMARY'] || '', todoId: p['X-TODO-ID'], done: p['STATUS'] === 'COMPLETED', priority: p['PRIORITY'] }
-    }).filter(e => e.todoId)
-    res.json({ events })
+      const rawDate = (p['DTSTART;VALUE=DATE'] || p['DTSTART'] || '').slice(0, 8)
+      const date = rawDate.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
+      return {
+        icalId: p['UID'],
+        date,
+        summary: (p['SUMMARY'] || '').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\n/g, ' '),
+        todoId: p['X-TODO-ID'] || null,
+        done: p['STATUS'] === 'COMPLETED',
+        priority: p['PRIORITY'] || ''
+      }
+    }).filter(e => e.date.startsWith(prefix) && e.summary)
+
+    res.json({ events, total: objects.length, calName: cal.displayName || cal.url })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

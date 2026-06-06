@@ -28,7 +28,7 @@ h1{font-size:22px;font-weight:700;color:#1e293b;display:flex;align-items:center;
 .weekrow div{text-align:center;padding:8px 0;font-size:12px;font-weight:600;color:#64748b}
 .weekrow div:first-child,.weekrow div:last-child{color:#f87171}
 .grid{display:grid;grid-template-columns:repeat(7,1fr)}
-.cell{border-right:1px solid #f1f5f9;border-bottom:1px solid #f1f5f9;min-height:96px;padding:6px;cursor:pointer;transition:background .15s;position:relative}
+.cell{border-right:1px solid #f1f5f9;border-bottom:1px solid #f1f5f9;min-height:96px;padding:6px;cursor:pointer;transition:background .15s;position:relative;min-width:0;overflow:hidden;width:100%}
 .cell:nth-child(7n){border-right:none}
 .cell:hover .day-num{background:#ede9fe}
 .cell.out{background:#fafafa;cursor:default}
@@ -37,8 +37,9 @@ h1{font-size:22px;font-weight:700;color:#1e293b;display:flex;align-items:center;
 .day-num{width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#374151;border-radius:50%;margin-bottom:4px}
 .day-num.today{background:#6366f1;color:#fff}
 .done-badge{position:absolute;top:6px;right:6px;width:16px;height:16px;background:#10b981;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:700}
-.chip{font-size:11px;line-height:1.3;padding:2px 5px;border-radius:4px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left-width:3px;border-left-style:solid}
+.chip{font-size:11px;line-height:1.4;padding:2px 5px;border-radius:4px;margin-bottom:2px;overflow:hidden;border-left-width:3px;border-left-style:solid;word-break:break-all;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;cursor:default}
 .chip.done{opacity:.4;text-decoration:line-through}
+.chip:hover{-webkit-line-clamp:unset;position:relative;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.15)}
 .more{font-size:10px;color:#94a3b8;padding-left:4px;font-weight:500}
 
 /* Modal */
@@ -108,6 +109,8 @@ h1{font-size:22px;font-weight:700;color:#1e293b;display:flex;align-items:center;
 .sync-now-btn{flex:1;padding:10px 20px;background:#6366f1;color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s}
 .sync-now-btn:hover{background:#4f46e5}
 .sync-now-btn:disabled{opacity:.5;cursor:not-allowed}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+#auto-pulse{width:7px;height:7px;border-radius:50%;background:#6366f1;display:none;animation:pulse 2s ease-in-out infinite;flex-shrink:0}
 </style>
 </head>
 <body>
@@ -127,6 +130,7 @@ h1{font-size:22px;font-weight:700;color:#1e293b;display:flex;align-items:center;
     <div style="display:flex;align-items:center;gap:8px">
       <div class="sync-chip"><span id="gdot" class="sync-dot"></span>G</div>
       <div class="sync-chip"><span id="idot" class="sync-dot"></span>iCloud</div>
+      <span id="auto-pulse"></span>
       <button class="btn-sync" onclick="openSyncModal()">⇄ 同步</button>
     </div>
     <button class="btn-today" onclick="goToday()">今天</button>
@@ -200,12 +204,33 @@ h1{font-size:22px;font-weight:700;color:#1e293b;display:flex;align-items:center;
         <h3><span id="idot-m" class="sync-dot"></span>iCloud Calendar</h3>
         <span id="ibadge" class="sync-badge">未连接</span>
       </div>
-      <input id="cdav-user" class="sync-field" type="email" placeholder="Apple ID（邮箱）"/>
-      <input id="cdav-pass" class="sync-field" type="password" placeholder="应用专用密码（xxxx-xxxx-xxxx-xxxx）"/>
-      <div class="sync-hint">在 <b>appleid.apple.com → 安全 → 应用专用密码</b> 生成，<br>不是 Apple ID 登录密码</div>
-      <button id="ibtn" class="sync-action-btn" onclick="connectCaldav()">连接 iCloud Calendar</button>
-    </div>
+      <!-- Connected view -->
+      <div id="caldav-ok" style="display:none;margin-bottom:10px">
+        <div style="font-size:12px;color:#10b981;font-weight:600;margin-bottom:8px" id="caldav-user-label">✅ 已连接</div>
+        <div id="cal-picker-wrap" style="display:none;margin-bottom:8px">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:5px">同步哪个日历</div>
+          <select id="cal-picker" onchange="switchCalendar(this.value)" style="width:100%;font-size:13px;border:1px solid #e2e8f0;border-radius:10px;padding:7px 10px;color:#374151;background:#fff;outline:none"></select>
+        </div>
+        <button class="sync-action-btn" onclick="showCaldavForm()" style="font-size:12px;padding:6px 10px">更换账号 / 密码</button>
+      </div>
+      <!-- Form view -->
+      <div id="caldav-form">
+        <input id="cdav-user" class="sync-field" type="email" placeholder="Apple ID（邮箱）"/>
+        <input id="cdav-pass" class="sync-field" type="password" placeholder="应用专用密码（xxxx-xxxx-xxxx-xxxx）"/>
+        <div class="sync-hint">在 <b>appleid.apple.com → 安全 → 应用专用密码</b> 生成<br>已连接时密码可留空（保持不变）</div>
+        <button id="ibtn" class="sync-action-btn" onclick="connectCaldav()">连接 iCloud Calendar</button>
+      </div>
 
+    <!-- Auto-sync interval -->
+    <div style="padding:12px 20px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:13px;font-weight:500;color:#374151">自动同步间隔</span>
+      <select id="sync-interval" onchange="updateAutoSyncInterval()" style="font-size:13px;border:1px solid #e2e8f0;border-radius:8px;padding:5px 10px;color:#374151;background:#fff;cursor:pointer;outline:none">
+        <option value="30">30 秒</option>
+        <option value="60" selected>1 分钟</option>
+        <option value="300">5 分钟</option>
+        <option value="0">关闭</option>
+      </select>
+    </div>
     <!-- Sync button -->
     <div style="padding:16px 20px;display:flex;align-items:center;gap:12px">
       <button id="sync-now-btn" class="sync-now-btn" onclick="syncAll()">立即同步</button>
@@ -431,36 +456,87 @@ function makeItem(t,i){
 // ── Sync Layer ─────────────────────────────────────────────────────
 const S_API='http://localhost:3456';
 let ss={google:false,caldav:false,down:false};
+let _autoTimer=null;
+const INTERVAL_KEY='_auto_sync_interval';
 
 async function initSync(){
   try{
     const r=await fetch(S_API+'/api/status',{signal:AbortSignal.timeout(2500)});
     const d=await r.json();
-    ss={google:d.google.connected,caldav:d.caldav.connected,down:false};
-  }catch{
-    ss.down=true;
-  }
+    ss={google:d.google.connected,caldav:d.caldav.connected,caldavUser:d.caldav.user||'',down:false};
+  }catch{ss.down=true;}
   _updateDots();
+  _applyCaldavState();
+  if(!ss.down&&(ss.google||ss.caldav)) startAutoSync();
 }
 
 function _updateDots(){
-  const setDot=(id,on)=>{const el=document.getElementById(id);if(el)el.className='sync-dot'+(on?' on':'');}
-  setDot('gdot',ss.google); setDot('gdot-m',ss.google);
-  setDot('idot',ss.caldav); setDot('idot-m',ss.caldav);
-  const gb=document.getElementById('gbadge');
-  const ib=document.getElementById('ibadge');
-  if(gb)gb.textContent=ss.down?'服务器未启动':ss.google?'✅ 已连接':'未连接';
-  if(gb)gb.className='sync-badge'+(ss.google?' on':'');
-  if(ib)ib.textContent=ss.down?'服务器未启动':ss.caldav?'✅ 已连接':'未连接';
-  if(ib)ib.className='sync-badge'+(ss.caldav?' on':'');
+  const setDot=(id,on)=>{const el=document.getElementById(id);if(el)el.className='sync-dot'+(on?' on':'');};
+  setDot('gdot',ss.google);setDot('gdot-m',ss.google);
+  setDot('idot',ss.caldav);setDot('idot-m',ss.caldav);
+  const gb=document.getElementById('gbadge'),ib=document.getElementById('ibadge');
+  if(gb){gb.textContent=ss.down?'服务器未启动':ss.google?'✅ 已连接':'未连接';gb.className='sync-badge'+(ss.google?' on':'');}
+  if(ib){
+    ib.textContent=ss.down?'服务器未启动':ss.caldav?(ss.caldavUser||'✅ 已连接'):'未连接';
+    ib.className='sync-badge'+(ss.caldav?' on':'');
+  }
 }
 
-function openSyncModal(){
-  _updateDots();
+// Switch between connected-view and form-view for iCloud
+function _applyCaldavState(){
+  const ok=document.getElementById('caldav-ok');
+  const form=document.getElementById('caldav-form');
+  if(!ok||!form) return;
+  if(ss.caldav&&ss.caldavUser){
+    ok.style.display='block'; form.style.display='none';
+    const lbl=document.getElementById('caldav-user-label');
+    if(lbl) lbl.textContent='✅ 已连接：'+ss.caldavUser;
+    // Pre-fill email so switching is easy
+    const uf=document.getElementById('cdav-user');
+    if(uf) uf.value=ss.caldavUser;
+  }else{
+    ok.style.display='none'; form.style.display='block';
+  }
+}
+
+function showCaldavForm(){
+  document.getElementById('caldav-ok').style.display='none';
+  document.getElementById('caldav-form').style.display='block';
+  document.getElementById('cdav-pass').value='';
+  setTimeout(()=>document.getElementById('cdav-user').focus(),50);
+}
+
+function _updateLastLabel(){
   const ls=localStorage.getItem('_last_sync');
   const el=document.getElementById('sync-last-label');
   if(el)el.textContent=ls?('上次同步: '+new Date(ls).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})):'从未同步';
+}
+
+function startAutoSync(){
+  clearInterval(_autoTimer);
+  const sec=parseInt(localStorage.getItem(INTERVAL_KEY)||'60',10);
+  const sel=document.getElementById('sync-interval');
+  if(sel)sel.value=String(sec);
+  const pulse=document.getElementById('auto-pulse');
+  if(sec===0){if(pulse)pulse.style.display='none';return;}
+  if(pulse)pulse.style.display='inline-block';
+  _autoTimer=setInterval(()=>pullFromCalendars(true),sec*1000);
+}
+
+function updateAutoSyncInterval(){
+  const val=parseInt(document.getElementById('sync-interval').value,10);
+  localStorage.setItem(INTERVAL_KEY,String(val));
+  startAutoSync();
+  showToast(val===0?'已关闭自动同步':`自动同步已设置：每 ${val<60?val+'秒':val/60+'分钟'} 拉取一次`);
+}
+
+function openSyncModal(){
+  _updateDots();_updateLastLabel();
+  _applyCaldavState();
+  const sel=document.getElementById('sync-interval');
+  if(sel)sel.value=localStorage.getItem(INTERVAL_KEY)||'60';
   document.getElementById('sync-ov').style.display='flex';
+  if(ss.caldav) loadCalendarPicker();
 }
 function closeSyncModal(){document.getElementById('sync-ov').style.display='none';}
 
@@ -475,10 +551,8 @@ async function connectGoogle(){
     const w=window.open(d.url,'_google_auth','width=520,height=640,left=200,top=100');
     const onMsg=async e=>{
       if(e.data==='google-connected'){
-        w&&w.close();
-        window.removeEventListener('message',onMsg);
-        await initSync();
-        showToast('✅ Google Calendar 已连接');
+        w&&w.close();window.removeEventListener('message',onMsg);
+        await initSync();showToast('✅ Google Calendar 已连接');
       }
     };
     window.addEventListener('message',onMsg);
@@ -490,19 +564,57 @@ async function connectCaldav(){
   if(ss.down){showToast('❌ 同步服务器未启动，请运行 node server.js');return;}
   const user=document.getElementById('cdav-user').value.trim();
   const pass=document.getElementById('cdav-pass').value.trim();
-  if(!user||!pass){showToast('请填写 Apple ID 和应用专用密码');return;}
+  if(!user){showToast('请填写 Apple ID 邮箱');return;}
+  // pass can be empty if already connected (server reuses saved password)
+  if(!pass&&!ss.caldav){showToast('请填写应用专用密码');return;}
   const btn=document.getElementById('ibtn');
   btn.textContent='连接中...';btn.disabled=true;
   try{
+    const body={username:user};
+    if(pass) body.password=pass;  // omit to reuse saved password on server
     const r=await fetch(S_API+'/api/caldav/connect',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({username:user,password:pass})
+      body:JSON.stringify(body)
     });
     const d=await r.json();
-    if(d.ok){ss.caldav=true;_updateDots();showToast('✅ iCloud Calendar 已连接');}
-    else showToast('❌ '+d.error);
+    if(d.ok){
+      ss.caldav=true;ss.caldavUser=user;
+      _updateDots();_applyCaldavState();
+      showToast('✅ iCloud Calendar 已连接：'+user);
+      await loadCalendarPicker();
+      startAutoSync();
+    }else showToast('❌ '+d.error);
   }catch(e){showToast('❌ '+e.message);
   }finally{btn.textContent='连接 iCloud Calendar';btn.disabled=false;}
+}
+
+async function loadCalendarPicker(){
+  try{
+    const r=await fetch(S_API+'/api/caldav/calendars');
+    const d=await r.json();
+    if(!d.calendars||!d.calendars.length)return;
+    const wrap=document.getElementById('cal-picker-wrap');
+    const sel=document.getElementById('cal-picker');
+    sel.innerHTML='';
+    d.calendars.forEach(c=>{
+      const o=document.createElement('option');
+      o.value=c.url;
+      o.textContent=c.name||c.url;
+      o.selected=!!c.active;
+      sel.appendChild(o);
+    });
+    wrap.style.display='block';
+  }catch{}
+}
+
+async function switchCalendar(url){
+  try{
+    await fetch(S_API+'/api/caldav/set-calendar',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url})
+    });
+    showToast('✅ 已切换日历');
+  }catch(e){showToast('❌ '+e.message);}
 }
 
 async function syncTodo(date,todo,action){
@@ -515,8 +627,7 @@ async function syncTodo(date,todo,action){
         body:JSON.stringify({date,todo})
       }).then(r=>r.json()).then(d=>{
         if(d.gcalId&&d.gcalId!==todo.gcalId){
-          const list=todos[date]||[];
-          const t=list.find(x=>x.id===todo.id);
+          const t=(todos[date]||[]).find(x=>x.id===todo.id);
           if(t){t.gcalId=d.gcalId;saveData();}
         }
       }).catch(()=>{}));
@@ -531,8 +642,7 @@ async function syncTodo(date,todo,action){
         body:JSON.stringify({date,todo})
       }).then(r=>r.json()).then(d=>{
         if(d.icalId&&d.icalId!==todo.icalId){
-          const list=todos[date]||[];
-          const t=list.find(x=>x.id===todo.id);
+          const t=(todos[date]||[]).find(x=>x.id===todo.id);
           if(t){t.icalId=d.icalId;saveData();}
         }
       }).catch(()=>{}));
@@ -543,77 +653,80 @@ async function syncTodo(date,todo,action){
   await Promise.all(ps);
 }
 
+// Pull-only: fetch calendar events and import ones not yet in local todos
+async function pullFromCalendars(silent=false){
+  if(ss.down||(!ss.google&&!ss.caldav))return;
+  let changed=false;
+  try{
+    if(ss.google){
+      const r=await fetch(`${S_API}/api/google/events?year=${curYear}&month=${curMonth+1}`);
+      const d=await r.json();
+      for(const ev of(d.events||[])){
+        if(!ev.date||!ev.props._todoId)continue;
+        if((todos[ev.date]||[]).find(t=>t.id===ev.props._todoId||t.gcalId===ev.gcalId))continue;
+        if(!todos[ev.date])todos[ev.date]=[];
+        todos[ev.date].push({id:ev.props._todoId||uid(),content:ev.summary.replace(/^\[P\d\]\s*/,''),priority:ev.props._todoPriority||'P2',done:ev.props._todoDone==='true',retro:'',gcalId:ev.gcalId});
+        changed=true;
+      }
+    }
+    if(ss.caldav){
+      const r=await fetch(`${S_API}/api/caldav/events?year=${curYear}&month=${curMonth+1}`);
+      const d=await r.json();
+      const pMap={'1':'P0','5':'P1','9':'P2'};
+      for(const ev of(d.events||[])){
+        if(!ev.date||!ev.summary)continue;
+        // Match by icalId or todoId (avoid duplicates)
+        if((todos[ev.date]||[]).find(t=>
+          (ev.icalId&&t.icalId===ev.icalId)||
+          (ev.todoId&&t.id===ev.todoId)
+        ))continue;
+        if(!todos[ev.date])todos[ev.date]=[];
+        // Strip [Px] prefix added by this app, leave original title otherwise
+        const content=ev.summary.replace(/^\[P[012]\]\s*/,'');
+        todos[ev.date].push({
+          id:ev.todoId||uid(),
+          content,
+          priority:pMap[ev.priority]||'P2',
+          done:ev.done,
+          retro:'',
+          icalId:ev.icalId
+        });
+        changed=true;
+      }
+    }
+    if(changed){saveData();renderCalendar();if(modalDk)renderList();}
+    localStorage.setItem('_last_sync',new Date().toISOString());
+    _updateLastLabel();
+    if(changed&&!silent)showToast('✅ 发现新事件，已导入');
+  }catch(e){
+    if(!silent)showToast('❌ 拉取失败: '+e.message);
+  }
+}
+
 async function syncAll(){
   if(ss.down){showToast('❌ 同步服务器未启动，请运行 node server.js');return;}
   const btn=document.getElementById('sync-now-btn');
   btn.textContent='同步中...';btn.disabled=true;
   try{
-    // 1. Push all local todos to calendars
-    for(const[date,list]of Object.entries(todos)){
-      for(const t of list){
-        await syncTodo(date,t,'upsert');
-      }
-    }
-
-    // 2. Pull from Google Calendar — import events not in local todos
-    if(ss.google){
-      const r=await fetch(`${S_API}/api/google/events?year=${curYear}&month=${curMonth+1}`);
-      const d=await r.json();
-      let changed=false;
-      for(const ev of(d.events||[])){
-        if(!ev.date||!ev.props._todoId)continue;
-        const alreadyHere=(todos[ev.date]||[]).find(t=>t.id===ev.props._todoId||t.gcalId===ev.gcalId);
-        if(!alreadyHere){
-          if(!todos[ev.date])todos[ev.date]=[];
-          const content=ev.summary.replace(/^\[P\d\]\s*/,'');
-          todos[ev.date].push({id:ev.props._todoId||uid(),content,priority:ev.props._todoPriority||'P2',done:ev.props._todoDone==='true',retro:'',gcalId:ev.gcalId});
-          changed=true;
-        }
-      }
-      if(changed){saveData();renderCalendar();}
-    }
-
-    // 3. Pull from iCloud — import events not in local todos
-    if(ss.caldav){
-      const r=await fetch(`${S_API}/api/caldav/events?year=${curYear}&month=${curMonth+1}`);
-      const d=await r.json();
-      let changed=false;
-      for(const ev of(d.events||[])){
-        if(!ev.date||!ev.todoId)continue;
-        const alreadyHere=(todos[ev.date]||[]).find(t=>t.id===ev.todoId||t.icalId===ev.icalId);
-        if(!alreadyHere){
-          if(!todos[ev.date])todos[ev.date]=[];
-          const content=ev.summary.replace(/^\[P\d\]\s*/,'');
-          const pMap={'1':'P0','5':'P1','9':'P2'};
-          todos[ev.date].push({id:ev.todoId||uid(),content,priority:pMap[ev.priority]||'P2',done:ev.done,retro:'',icalId:ev.icalId});
-          changed=true;
-        }
-      }
-      if(changed){saveData();renderCalendar();}
-    }
-
+    for(const[date,list]of Object.entries(todos))
+      for(const t of list) await syncTodo(date,t,'upsert');
+    await pullFromCalendars(true);
     localStorage.setItem('_last_sync',new Date().toISOString());
-    const el=document.getElementById('sync-last-label');
-    if(el)el.textContent='上次同步: 刚刚';
-    showToast('✅ 同步完成');
-  }catch(e){
-    showToast('❌ 同步失败: '+e.message);
-  }finally{
-    btn.textContent='立即同步';btn.disabled=false;
-  }
+    _updateLastLabel();
+    showToast('✅ 全量同步完成');
+  }catch(e){showToast('❌ 同步失败: '+e.message);
+  }finally{btn.textContent='立即同步';btn.disabled=false;}
 }
 
 function showToast(msg){
   let t=document.getElementById('_toast');
   if(!t){
-    t=document.createElement('div');
-    t.id='_toast';
+    t=document.createElement('div');t.id='_toast';
     t.style.cssText='position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:10px 20px;border-radius:12px;font-size:13px;z-index:9999;transition:opacity .3s;pointer-events:none;white-space:nowrap';
     document.body.appendChild(t);
   }
   t.textContent=msg;t.style.opacity='1';
-  clearTimeout(t._tid);
-  t._tid=setTimeout(()=>{t.style.opacity='0';},3000);
+  clearTimeout(t._tid);t._tid=setTimeout(()=>{t.style.opacity='0';},3000);
 }
 
 // ── Init ───────────────────────────────────────────────────────────
