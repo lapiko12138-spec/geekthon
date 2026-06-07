@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fetch } from "@tauri-apps/plugin-http";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import atlasUrl from "./assets/pets/bow-kitty-contract-16/bow-kitty-contract-16.webp";
 import rawMap from "./assets/pets/bow-kitty-contract-16/contract-state-map.json";
 
@@ -48,6 +49,10 @@ const POLL_MS = 5000;
 const ACTIVITY = "http://localhost:4100/activity";
 const ACTIVITY_POLL_MS = 2000; // how often the pet checks if the agent is active
 const ACTIVITY_WINDOW_MS = 8000; // treat agent as "talking" if pinged within this window
+const WORKBENCH_URL = "http://localhost:4173"; // 双击菜单「打开工作台」默认指向健康看板
+// 飞书 applink：打开与机器人的会话（openChatId = ~/.hermes/.env 的 FEISHU_HOME_CHANNEL）
+const FEISHU_BOT_URL =
+  "https://applink.feishu.cn/client/chat/open?openChatId=oc_3fe82e4fc030def62ff66b76cbc7feef";
 
 const STATE_LABEL: Record<string, string> = {
   thriving: "今天超棒！全达标 🎉",
@@ -61,6 +66,7 @@ const STATE_LABEL: Record<string, string> = {
 
 const pet = document.getElementById("pet") as HTMLDivElement;
 const bubble = document.getElementById("bubble") as HTMLDivElement;
+const menu = document.getElementById("menu") as HTMLDivElement;
 const chatForm = document.getElementById("chat") as HTMLFormElement;
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 
@@ -415,6 +421,75 @@ async function askHermes(question: string) {
   }
 }
 
+// ── Double-click quick menu: preset asks + status(+reason) + open workbench ──
+async function showStateReason() {
+  try {
+    const res = await fetch(MOCK_TODAY, { method: "GET" });
+    const s = (await res.json()) as {
+      petState?: string;
+      exercise?: { goalMet?: boolean };
+      reading?: { goalMet?: boolean };
+      screen?: { goalMet?: boolean };
+    };
+    const st = s.petState ?? lastState ?? "resting";
+    const beforeAfternoon = (new Date().getUTCHours() + 8) % 24 < 15;
+    const why: Record<string, string> = {
+      thriving: "运动、阅读、屏幕全达标，今天超棒！",
+      good: beforeAfternoon ? "现在还没到下午 3 点，早上先不催你～" : "至少有一项达标了，还行。",
+      slacking: "今天目标都还没达成，有点摆烂哦。",
+      angry: "今天几乎没动、步数太少，我生气！",
+      eyestrain: "屏幕盯太久了，歇会儿眼。",
+      sick: "健康数据有点异常，我也蔫蔫的。",
+      resting: "夜深了或没数据，歇着呢。",
+    };
+    const f = (g?: boolean) => (g ? "✓" : "✗");
+    const flags = `运动${f(s.exercise?.goalMet)} 阅读${f(s.reading?.goalMet)} 屏幕${f(s.screen?.goalMet)}`;
+    showBubble(`我现在：${st}\n${why[st] ?? ""}\n（${flags}）`, 8000);
+  } catch {
+    showBubble("读不到状态数据（:4100 没开？）", 6000);
+  }
+}
+
+const MENU_ITEMS: { icon: string; short: string; label: string; run: () => void | Promise<void> }[] = [
+  { icon: "📋", short: "总结", label: "今日总结", run: () => askHermes("用你的工具看看我今天的运动、屏幕、阅读和日程，给我一段简短点评。") },
+  { icon: "💬", short: "聊聊", label: "随便聊聊", run: () => { chatForm.classList.remove("hidden"); chatInput.focus(); } },
+  { icon: "🤖", short: "飞书", label: "在飞书找麦麦", run: () => openUrl(FEISHU_BOT_URL) },
+  { icon: "🐱", short: "状态", label: "我现在啥状态", run: showStateReason },
+  { icon: "🛠️", short: "工作台", label: "打开工作台", run: () => openUrl(WORKBENCH_URL) },
+];
+
+function buildMenu() {
+  for (const item of MENU_ITEMS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "menu-item";
+    btn.title = item.label; // full label on hover
+    const ico = document.createElement("span");
+    ico.className = "ico";
+    ico.textContent = item.icon;
+    const lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = item.short;
+    btn.append(ico, lbl);
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideMenu();
+      void item.run();
+    });
+    menu.appendChild(btn);
+  }
+}
+function hideMenu() {
+  menu.classList.add("hidden");
+}
+function toggleMenu() {
+  menu.classList.toggle("hidden");
+  if (!menu.classList.contains("hidden")) {
+    bubble.classList.add("hidden");
+    chatForm.classList.add("hidden");
+  }
+}
+
 // ── Drag = walk (running-left/right by direction) + move the window ───────────
 const appWindow = getCurrentWindow();
 let downX = 0;
@@ -477,13 +552,26 @@ void appWindow.onMoved(({ payload }) => {
 window.addEventListener("mouseup", () => {
   if (walking) endWalk(); // backup end-of-drag signal
 });
+let clickTimer: number | undefined;
 pet.addEventListener("click", () => {
   if (dragged) {
     dragged = false;
     return;
   }
-  chatForm.classList.toggle("hidden");
-  if (!chatForm.classList.contains("hidden")) chatInput.focus();
+  if (clickTimer !== undefined) {
+    // second click within the window → double-click → quick menu
+    clearTimeout(clickTimer);
+    clickTimer = undefined;
+    toggleMenu();
+    return;
+  }
+  clickTimer = window.setTimeout(() => {
+    clickTimer = undefined;
+    // single click → chat input
+    hideMenu();
+    chatForm.classList.toggle("hidden");
+    if (!chatForm.classList.contains("hidden")) chatInput.focus();
+  }, 250);
 });
 chatForm.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -511,6 +599,7 @@ async function pollActivity() {
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
+buildMenu();
 resolve(); // start on ambient (resting) until the first poll arrives
 void pollScores();
 setInterval(() => void pollScores(), POLL_MS);
