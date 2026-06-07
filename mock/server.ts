@@ -75,8 +75,13 @@ function screenMetric(usageHr: number): MetricScore {
       : clamp01((2 * SCREEN_BUDGET_HR - usageHr) / SCREEN_BUDGET_HR);
   return { value: v, goalMet: usageHr <= SCREEN_BUDGET_HR };
 }
+// Beijing-time hour (UTC+8, no DST) — robust regardless of the machine timezone.
+function beijingHour(): number {
+  return (new Date().getUTCHours() + 8) % 24;
+}
+const NEG_OK_HOUR = 15; // 下午 3 点前不展示任何负面状态（给一天留出余地）
 function isNight(): boolean {
-  const h = new Date().getHours();
+  const h = beijingHour();
   return h >= NIGHT_START || h < NIGHT_END;
 }
 
@@ -87,15 +92,17 @@ function derivePetState(
   screen: MetricScore,
   healthAnomaly: boolean,
 ): PetState {
-  if (healthAnomaly) return 'sick'; //                                  1 vitals abnormal
-  if (isNight()) return 'resting'; //                                   2 night / no data
-  if (exercise.value < EXERCISE_LOW) return 'angry'; //                 3 moved almost nothing
-  if (screen.value <= SCREEN_SEVERE) return 'eyestrain'; //            4 screen heavily over budget
-  if (exercise.goalMet && reading.goalMet && screen.goalMet) {
-    return 'thriving'; //                                               5 all good
-  }
-  if (exercise.goalMet || reading.goalMet) return 'good'; //            6 at least one
-  return 'slacking'; //                                                 7 nothing met
+  if (isNight()) return 'resting'; //                          night (non-negative, anytime)
+  const allMet = exercise.goalMet && reading.goalMet && screen.goalMet;
+  if (allMet) return 'thriving'; //                            best (anytime)
+  // 下午 NEG_OK_HOUR 点前：不展示任何负面状态（angry/eyestrain/sick/slacking），最多到 good
+  if (beijingHour() < NEG_OK_HOUR) return 'good';
+  // NEG_OK_HOUR 之后：完整负面规则（sick > angry > eyestrain > good > slacking）
+  if (healthAnomaly) return 'sick';
+  if (exercise.value < EXERCISE_LOW) return 'angry';
+  if (screen.value <= SCREEN_SEVERE) return 'eyestrain';
+  if (exercise.goalMet || reading.goalMet) return 'good';
+  return 'slacking';
 }
 
 // Cumulative achievements reached today (the pet diffs NEW ones → celebrate).
@@ -205,6 +212,19 @@ app.post('/scores/today', (req: Request, res: Response) => {
 
   rawStore.set(date, raw);
   res.json(buildScores(date, raw));
+});
+
+// ── agent activity signal ────────────────────────────────────────────────────
+// Hermes' pre_llm_call hook POSTs here whenever the agent is thinking/replying
+// (any channel: Feishu, pet chat box, CLI). The pet polls it and plays a
+// "talking" animation while the agent is active.
+let lastActiveAt = 0;
+app.post("/activity", (_req: Request, res: Response) => {
+  lastActiveAt = Date.now();
+  res.json({ ok: true });
+});
+app.get("/activity", (_req: Request, res: Response) => {
+  res.json({ msAgo: lastActiveAt ? Date.now() - lastActiveAt : null });
 });
 
 // ── start ─────────────────────────────────────────────────────────────────────
