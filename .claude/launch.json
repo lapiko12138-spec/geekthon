@@ -2,10 +2,43 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "momo-home",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/zhangjiahui/momo-home/server.mjs"],
+      "port": 3002,
+      "autoPort": true
+    },
+    {
       "name": "weread-dashboard",
       "runtimeExecutable": "node",
       "runtimeArgs": ["/Users/zhangjiahui/Documents/weread-dashboard/server/wereadServer.mjs"],
       "port": 8788
+    },
+    {
+      "name": "todo-calendar",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/zhangjiahui/geekthon/todo-calendar/server.js"],
+      "port": 3456,
+      "autoPort": false
+    },
+    {
+      "name": "finance-tracker",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/zhangjiahui/geekthon/finance-tracker/server.js"],
+      "port": 3457,
+      "autoPort": false
+    },
+    {
+      "name": "xiao-xiao-wardrobe",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "/Users/zhangjiahui/xiao-xiao-wardrobe", "run", "dev", "--", "--port", "3001"],
+      "port": 3001
+    },
+    {
+      "name": "pet-vite",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "/Users/zhangjiahui/geekthon/pet", "dev"],
+      "port": 1420
     }
   ]
 }
