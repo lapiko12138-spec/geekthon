@@ -9,6 +9,7 @@ dist/
 
 # Logs
 *.log
+.logs/
 
 # Env / secrets
 .env

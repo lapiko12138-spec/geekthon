@@ -8,6 +8,56 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
+    <!-- Onboarding wizard — shown on first launch, hidden after setup -->
+    <div id="wizard" class="hidden">
+      <div class="wz-dots">
+        <span class="wz-dot"></span>
+        <span class="wz-dot"></span>
+        <span class="wz-dot"></span>
+        <span class="wz-dot"></span>
+      </div>
+
+      <div class="wz-step" id="wz-s1">
+        <div class="wz-hero">🐱</div>
+        <h2 class="wz-h">你好！我是麦麦～</h2>
+        <p class="wz-p">住在你桌面上的小猫。<br>先做个小设置，就三步！</p>
+        <button class="wz-btn-primary" id="wz-start">开始 →</button>
+      </div>
+
+      <div class="wz-step hidden" id="wz-s2">
+        <h3 class="wz-step-h">① 给我起个名字</h3>
+        <input class="wz-input" id="wz-name" type="text" maxlength="6" placeholder="麦麦" />
+        <span class="wz-label">性格</span>
+        <div class="wz-tags" id="wz-persona">
+          <button class="wz-tag sel" data-val="tsundere">傲娇</button>
+          <button class="wz-tag" data-val="gentle">温柔</button>
+          <button class="wz-tag" data-val="lazy">懒猫</button>
+        </div>
+        <button class="wz-btn-primary" id="wz-to3">下一步 →</button>
+      </div>
+
+      <div class="wz-step hidden" id="wz-s3">
+        <h3 class="wz-step-h">② 连接 AI 大脑</h3>
+        <p class="wz-hint">Hermes API Key<br>
+          <small>（与 ~/.hermes/.env 的 API_SERVER_KEY 一致）</small>
+        </p>
+        <div class="wz-key-row">
+          <input class="wz-input wz-key-i" id="wz-key" type="password" placeholder="change-me-local-dev" />
+          <button class="wz-test-btn" id="wz-test">测试</button>
+        </div>
+        <span id="wz-test-msg"></span>
+        <button class="wz-btn-primary" id="wz-to4">下一步 →</button>
+        <button class="wz-link" id="wz-skip3">暂时跳过</button>
+      </div>
+
+      <div class="wz-step hidden" id="wz-s4">
+        <div class="wz-hero">🎉</div>
+        <h2 class="wz-h" id="wz-done-title">准备好了！</h2>
+        <p class="wz-p">开始在桌面陪伴你啦～</p>
+        <button class="wz-btn-primary" id="wz-finish">出发！</button>
+      </div>
+    </div>
+
     <div id="pet-root">
       <div id="bubble" class="hidden"></div>
       <form id="chat" class="hidden" autocomplete="off">

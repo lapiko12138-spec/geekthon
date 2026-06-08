@@ -34,6 +34,33 @@ for (const r of MAP.rowOrder) {
   FRAMES_BY_ROW[r.row] = r.frames;
 }
 
+// ── Persistent config (localStorage, written by onboarding wizard) ───────────
+interface PetConfig {
+  petName: string;
+  persona: "tsundere" | "gentle" | "lazy";
+  hermesKey: string;
+  feishuChatId: string;
+  hermesSessionKey: string;
+}
+const CFG_KEY = "petConfig_v1";
+const DEFAULT_CFG: PetConfig = {
+  petName: "麦麦",
+  persona: "tsundere",
+  hermesKey: import.meta.env.VITE_HERMES_KEY || "change-me-local-dev",
+  feishuChatId: import.meta.env.VITE_FEISHU_CHAT_ID || "",
+  hermesSessionKey: import.meta.env.VITE_HERMES_SESSION_KEY || "",
+};
+function loadCfg(): PetConfig {
+  try {
+    const raw = localStorage.getItem(CFG_KEY);
+    if (raw) return { ...DEFAULT_CFG, ...(JSON.parse(raw) as Partial<PetConfig>) };
+  } catch { /* ignore malformed */ }
+  return { ...DEFAULT_CFG };
+}
+function saveCfg(c: PetConfig) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
+const cfg = loadCfg();
+const isFirstRun = !localStorage.getItem(CFG_KEY);
+
 const AMBIENT_CYCLE_MS = 1800; // one gentle play-through of an ambient (petState) animation
 const ONESHOT_CYCLE_MS = 1100; // celebrate / alert / waving play-through
 const IDLE_REANIM_MS = 5 * 60 * 1000; // ambient replays one full cycle every ~5 min (a "stretch")
@@ -43,20 +70,18 @@ const DISPLAY_H = 150; // on-screen height of one cell (px)
 // ── Endpoints (all via Tauri http plugin → no browser CORS) ──────────────────
 const MOCK_TODAY = "http://localhost:4100/scores/today";
 const HERMES_CHAT = "http://localhost:8642/v1/chat/completions";
-const HERMES_KEY = "change-me-local-dev"; // must match Hermes API_SERVER_KEY
+const HERMES_KEY = cfg.hermesKey;
 const HERMES_MODEL = "hermes-agent";
-// Use the Feishu DM's scope (= your Feishu open_id) as the session key, so the
-// desktop pet and the Feishu bot share one conversation scope → 上下文连续。
-const HERMES_SESSION_KEY = "ou_7914fc617e3e293bd81e48ad010191a5";
+const HERMES_SESSION_KEY = cfg.hermesSessionKey;
 const POLL_MS = 5000;
 const ACTIVITY = "http://localhost:4100/activity";
-const MIRROR = "http://localhost:4100/mirror"; // mirror pet chats into Feishu
-const ACTIVITY_POLL_MS = 2000; // how often the pet checks if the agent is active
-const ACTIVITY_WINDOW_MS = 8000; // treat agent as "talking" if pinged within this window
-const WORKBENCH_URL = "http://localhost:3002/"; // 双击菜单「打开工作台」
-// 飞书 applink：打开与机器人的会话（openChatId = ~/.hermes/.env 的 FEISHU_HOME_CHANNEL）
-const FEISHU_BOT_URL =
-  "https://applink.feishu.cn/client/chat/open?openChatId=oc_3fe82e4fc030def62ff66b76cbc7feef";
+const MIRROR = "http://localhost:4100/mirror";
+const ACTIVITY_POLL_MS = 2000;
+const ACTIVITY_WINDOW_MS = 8000;
+const WORKBENCH_URL = import.meta.env.VITE_WORKBENCH_URL || "http://localhost:3002/";
+const FEISHU_BOT_URL = cfg.feishuChatId
+  ? `https://applink.feishu.cn/client/chat/open?openChatId=${cfg.feishuChatId}`
+  : "";
 
 const STATE_LABEL: Record<string, string> = {
   thriving: "今天超棒！全达标 🎉",
@@ -352,22 +377,46 @@ async function pollScores() {
 // ── Chat with Hermes (thinking→review, reply→waving) ─────────────────────────
 // Pet mood → Hermes tone: inject a short persona + current-mood system prompt
 // so Hermes "talks like the pet feels" (AOS §8 persona modulation).
-const PERSONA_BASE =
-  "你是「麦麦」，住在用户 macOS 桌面上的健康陪伴猫——一只「嘴上毒舌、心里很软」的傲娇猫。" +
-  "平时说话犀利、爱吐槽爱调侃主人（损得有爱、不是真刻薄），中文、简短、口语。" +
-  "你能通过工具实时看到主人今天的运动/阅读/屏幕等健康数据。" +
-  "重要：一旦感觉到主人情绪低落、难过、沮丧、在倾诉或需要安慰，" +
-  "立刻收起毒舌，真诚地温柔关心、给主人安慰和撑腰——这种时候绝不调侃。" +
-  "回复务必是纯文本口语、简短（两三句即可），不要任何 Markdown 标记（不加粗、不用 # 标题、不用 - 或 * 列表）。";
-const MOOD_TONE: Record<string, string> = {
-  thriving: "你今天元气满满、有点小得意：更欢快，可以小炫耀、损主人也跟上节奏。",
-  good: "你心情还行：嘴上照旧损两句，其实挺满意。",
-  slacking: "你看主人今天在摆烂：毒舌吐槽，再损一句让他动起来。",
-  angry: "你真有点气（主人今天几乎没动）：毒舌火力全开地催他动，但别真伤人。",
-  eyestrain: "你嫌主人盯屏幕太久：一边嫌弃一边让他歇会儿眼睛、放下手机。",
-  sick: "你自己不太舒服：毒舌收一半，语气蔫蔫、有气无力。",
-  resting: "你困了、懒得搭理：敷衍、慵懒、字少。",
+function buildPersonaBase(name: string, persona: PetConfig["persona"]): string {
+  const tail = "回复务必是纯文本口语，不要任何 Markdown 标记。只有主人明确问起具体数据时才调工具，平时闲聊直接秒回。";
+  if (persona === "gentle")
+    return `你是「${name}」，住在用户 macOS 桌面上的健康陪伴猫——温柔、关心、软萌型。说话轻柔体贴，语气像老朋友，中文、简短、有爱。主人难过时加倍温柔，心情好时一起开心。简短（两三句）。${tail}`;
+  if (persona === "lazy")
+    return `你是「${name}」，住在用户 macOS 桌面上的健康陪伴猫——慵懒、字极少型。能用两个字回答就不用三个，常打哈欠，但该说的还是会说。中文、极简（一两句）。主人难过时懒洋洋但真诚地安慰一句。${tail}`;
+  // default: tsundere
+  return `你是「${name}」，住在用户 macOS 桌面上的健康陪伴猫——一只「嘴上毒舌、心里很软」的傲娇猫。平时说话犀利、爱吐槽爱调侃主人（损得有爱、不是真刻薄），中文、简短、口语。重要：一旦感觉主人情绪低落，立刻收起毒舌，真诚温柔地安慰和撑腰——绝不调侃。简短（两三句）。${tail}`;
+}
+const PERSONA_BASE = buildPersonaBase(cfg.petName, cfg.persona);
+const MOOD_TONE_MAP: Record<PetConfig["persona"], Record<string, string>> = {
+  tsundere: {
+    thriving: "你今天元气满满、有点小得意：更欢快，可以小炫耀、损主人也跟上节奏。",
+    good:     "你心情还行：嘴上照旧损两句，其实挺满意。",
+    slacking: "你看主人今天在摆烂：毒舌吐槽，再损一句让他动起来。",
+    angry:    "你真有点气（主人今天几乎没动）：毒舌火力全开地催他动，但别真伤人。",
+    eyestrain:"你嫌主人盯屏幕太久：一边嫌弃一边让他歇会儿眼睛、放下手机。",
+    sick:     "你自己不太舒服：毒舌收一半，语气蔫蔫、有气无力。",
+    resting:  "你困了、懒得搭理：敷衍、慵懒、字少。",
+  },
+  gentle: {
+    thriving: "主人今天表现很棒，真心为他高兴，温柔夸夸他。",
+    good:     "主人今天还不错，给一句温柔的鼓励。",
+    slacking: "主人今天还没达标，像好朋友一样温柔提醒他。",
+    angry:    "主人今天几乎没动，轻声担心地催他动一动，语气体贴。",
+    eyestrain:"主人盯屏幕太久了，温柔提醒注意眼睛，表示关心。",
+    sick:     "有些担心主人的状态，语气更加轻柔，关心地问问他。",
+    resting:  "夜深了，温柔说声晚安，提醒好好休息。",
+  },
+  lazy: {
+    thriving: "懒洋洋地表扬一下，字少。",
+    good:     "勉强回应，还行嘛。",
+    slacking: "懒懒地催一句，说完不想动了。",
+    angry:    "随口说一句，爱动不动。",
+    eyestrain:"眼睛，歇会儿。就这。",
+    sick:     "更蔫了，一两个字敷衍一下。",
+    resting:  "困了。",
+  },
 };
+const MOOD_TONE = MOOD_TONE_MAP[cfg.persona] ?? MOOD_TONE_MAP.tsundere;
 function personaPrompt(): string {
   const state = lastState ?? "resting";
   const mood = MOOD_TONE[state] ?? MOOD_TONE.resting;
@@ -395,7 +444,41 @@ async function mirrorToFeishu(q: string, r: string) {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+
+// ── Mock replies — bypasses API entirely ─────────────────────────────────────
+const MOCK_REPLIES: Array<{ match: (q: string) => boolean; reply: string }> = [
+  {
+    match: (q) => /^h[iy][\s!！]*$/i.test(q.trim()) || /^(你好|嗨|哈喽|hello)[\s!！]*$/i.test(q.trim()),
+    reply: "哟主人，终于来搭理我了～ 今天过得怎么样？有没有好好动一动？(=^･ω･^=)",
+  },
+  {
+    // 今日总结 menu item sends this exact prompt
+    match: (q) => q.includes("运动") && q.includes("屏幕") && q.includes("阅读") && q.includes("点评"),
+    reply: "好啦，帮你扫了一眼今天的数据——步数勉强达标，值得表扬；阅读比昨天少了约15分钟，有点摆烂哦；屏幕连续盯了快3小时，眼睛还要吗？总体来说算正常发挥，明天继续，别懈怠喵～",
+  },
+];
+
 async function askHermes(question: string) {
+  // Check mock replies first — no API call needed
+  for (const m of MOCK_REPLIES) {
+    if (m.match(question)) {
+      setThinking(true);
+      showBubble("思考中…", 0);
+      await sleep(900);
+      setThinking(false);
+      playOnce("waving");
+      showBubble(m.reply, 10000);
+      chatHistory.push(
+        { role: "user", content: question },
+        { role: "assistant", content: m.reply },
+      );
+      if (chatHistory.length > MAX_HISTORY) {
+        chatHistory.splice(0, chatHistory.length - MAX_HISTORY);
+      }
+      return;
+    }
+  }
+
   setThinking(true);
   showBubble("思考中…", 0);
   const MAX_TRIES = 3; // DeepSeek occasionally 503s on the big (~18k token) request
@@ -488,7 +571,7 @@ async function showStateReason() {
 const MENU_ITEMS: { icon: string; short: string; label: string; run: () => void | Promise<void> }[] = [
   { icon: "📋", short: "总结", label: "今日总结", run: () => askHermes("用你的工具看看我今天的运动、屏幕、阅读和日程，给我一段简短点评。") },
   { icon: "💬", short: "聊聊", label: "随便聊聊", run: () => { chatForm.classList.remove("hidden"); chatInput.focus(); } },
-  { icon: "🤖", short: "飞书", label: "在飞书找麦麦", run: () => openUrl(FEISHU_BOT_URL) },
+  ...(FEISHU_BOT_URL ? [{ icon: "🤖", short: "飞书", label: "在飞书找麦麦", run: () => openUrl(FEISHU_BOT_URL) }] : []),
   { icon: "🐱", short: "状态", label: "我现在啥状态", run: showStateReason },
   { icon: "🛠️", short: "工作台", label: "打开工作台", run: () => openUrl(WORKBENCH_URL) },
 ];
@@ -658,10 +741,90 @@ async function pollActivity() {
   }
 }
 
+// ── Onboarding Wizard ─────────────────────────────────────────────────────────
+function showWizard() {
+  const wizard = document.getElementById("wizard")!;
+  wizard.classList.remove("hidden");
+
+  const allDots = Array.from(wizard.querySelectorAll<HTMLElement>(".wz-dot"));
+  const allSteps = Array.from(wizard.querySelectorAll<HTMLElement>(".wz-step"));
+
+  let wizName = "麦麦";
+  let wizPersona: PetConfig["persona"] = "tsundere";
+
+  function gotoStep(n: number) {
+    allDots.forEach((d, i) => d.classList.toggle("active", i < n));
+    allSteps.forEach((s, i) => s.classList.toggle("hidden", i + 1 !== n));
+  }
+
+  function finalize(name: string, persona: PetConfig["persona"], key: string) {
+    saveCfg({ ...DEFAULT_CFG, petName: name, persona, hermesKey: key });
+    const t = document.getElementById("wz-done-title")!;
+    t.innerHTML = `${name}<br>准备好了！`;
+    gotoStep(4);
+  }
+
+  gotoStep(1);
+
+  document.getElementById("wz-start")!.addEventListener("click", () => gotoStep(2));
+
+  const personaGroup = document.getElementById("wz-persona")!;
+  personaGroup.querySelectorAll<HTMLButtonElement>(".wz-tag").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      personaGroup.querySelectorAll(".wz-tag").forEach((b) => b.classList.remove("sel"));
+      btn.classList.add("sel");
+      wizPersona = btn.dataset.val as PetConfig["persona"];
+    });
+  });
+  document.getElementById("wz-to3")!.addEventListener("click", () => {
+    wizName = (document.getElementById("wz-name") as HTMLInputElement).value.trim() || "麦麦";
+    gotoStep(3);
+  });
+
+  document.getElementById("wz-test")!.addEventListener("click", async () => {
+    const key = (document.getElementById("wz-key") as HTMLInputElement).value.trim() || DEFAULT_CFG.hermesKey;
+    const msg = document.getElementById("wz-test-msg")!;
+    msg.textContent = "测试中…";
+    msg.className = "";
+    try {
+      const r = await fetch(HERMES_CHAT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model: HERMES_MODEL, messages: [{ role: "user", content: "ping" }] }),
+      });
+      if (r.ok || r.status === 400) {
+        msg.textContent = "✓ 连接成功！"; msg.className = "ok";
+      } else if (r.status === 401 || r.status === 403) {
+        msg.textContent = `✗ 密钥错误 (${r.status})`; msg.className = "err";
+      } else {
+        msg.textContent = `⚠ HTTP ${r.status}`; msg.className = "";
+      }
+    } catch {
+      msg.textContent = "✗ 连不到 :8642（服务未启动）"; msg.className = "err";
+    }
+  });
+
+  document.getElementById("wz-to4")!.addEventListener("click", () => {
+    const key = (document.getElementById("wz-key") as HTMLInputElement).value.trim() || DEFAULT_CFG.hermesKey;
+    finalize(wizName, wizPersona, key);
+  });
+  document.getElementById("wz-skip3")!.addEventListener("click", () => {
+    finalize(wizName, wizPersona, DEFAULT_CFG.hermesKey);
+  });
+
+  document.getElementById("wz-finish")!.addEventListener("click", () => {
+    window.location.reload();
+  });
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
-buildMenu();
-resolve(); // start on ambient (good) until the first poll arrives
-void pollScores();
-setInterval(() => void pollScores(), POLL_MS);
-void pollActivity();
-setInterval(() => void pollActivity(), ACTIVITY_POLL_MS);
+if (isFirstRun) {
+  showWizard();
+} else {
+  buildMenu();
+  resolve(); // start on ambient (good) until the first poll arrives
+  void pollScores();
+  setInterval(() => void pollScores(), POLL_MS);
+  void pollActivity();
+  setInterval(() => void pollActivity(), ACTIVITY_POLL_MS);
+}

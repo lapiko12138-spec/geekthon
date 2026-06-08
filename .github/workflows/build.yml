@@ -1,0 +1,105 @@
+name: Build Desktop App
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:          # 也可以在 Actions 页面手动触发
+
+jobs:
+  # ── Windows ──────────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./pet/src-tauri -> target"
+
+      - name: Install frontend dependencies
+        working-directory: ./pet
+        run: pnpm install
+
+      - name: Build Tauri (Windows)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: ./pet
+          tauriScript: pnpm tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Vite env 变量：用默认值打包，用户首次启动通过向导设置
+          VITE_HERMES_KEY: change-me-local-dev
+          VITE_WORKBENCH_URL: "http://localhost:3002/"
+
+      - name: Upload Windows installer (.msi)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pet-windows-msi
+          path: pet/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn
+
+      - name: Upload Windows installer (.exe / NSIS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pet-windows-exe
+          path: pet/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+
+  # ── macOS (顺便也出一个正式包) ───────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./pet/src-tauri -> target"
+
+      - name: Install frontend dependencies
+        working-directory: ./pet
+        run: pnpm install
+
+      - name: Build Tauri (macOS)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: ./pet
+          tauriScript: pnpm tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_HERMES_KEY: change-me-local-dev
+          VITE_WORKBENCH_URL: "http://localhost:3002/"
+
+      - name: Upload macOS app
+        uses: actions/upload-artifact@v4
+        with:
+          name: pet-macos-dmg
+          path: pet/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: warn

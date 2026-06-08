@@ -1,6 +1,10 @@
 # Logs
 logs
 *.log
+
+# Env / secrets (use .env.example as template)
+.env
+.env.local
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
