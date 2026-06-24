@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { fetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import atlasUrl from "./assets/pets/bow-kitty-contract-16/bow-kitty-contract-16.webp";
@@ -741,85 +742,95 @@ async function pollActivity() {
   }
 }
 
-// ── Onboarding Wizard ─────────────────────────────────────────────────────────
-function showWizard() {
-  const wizard = document.getElementById("wizard")!;
-  wizard.classList.remove("hidden");
+// ── Onboarding / Settings Wizard ──────────────────────────────────────────────
+// Same UI serves two modes: first-run onboarding (must complete) and a re-openable
+// settings panel (triggered by the tray "设置…"). Listeners are wired once here.
+const wizardEl = document.getElementById("wizard")!;
+const wzCloseBtn = document.getElementById("wz-close")!;
+const wzDots = Array.from(wizardEl.querySelectorAll<HTMLElement>(".wz-dot"));
+const wzSteps = Array.from(wizardEl.querySelectorAll<HTMLElement>(".wz-step"));
+const wzNameInput = document.getElementById("wz-name") as HTMLInputElement;
+const wzKeyInput = document.getElementById("wz-key") as HTMLInputElement;
+const wzPersonaGroup = document.getElementById("wz-persona")!;
+const wzTestMsg = document.getElementById("wz-test-msg")!;
+let wizName = cfg.petName;
+let wizPersona: PetConfig["persona"] = cfg.persona;
 
-  const allDots = Array.from(wizard.querySelectorAll<HTMLElement>(".wz-dot"));
-  const allSteps = Array.from(wizard.querySelectorAll<HTMLElement>(".wz-step"));
-
-  let wizName = "麦麦";
-  let wizPersona: PetConfig["persona"] = "tsundere";
-
-  function gotoStep(n: number) {
-    allDots.forEach((d, i) => d.classList.toggle("active", i < n));
-    allSteps.forEach((s, i) => s.classList.toggle("hidden", i + 1 !== n));
-  }
-
-  function finalize(name: string, persona: PetConfig["persona"], key: string) {
-    saveCfg({ ...DEFAULT_CFG, petName: name, persona, hermesKey: key });
-    const t = document.getElementById("wz-done-title")!;
-    t.innerHTML = `${name}<br>准备好了！`;
-    gotoStep(4);
-  }
-
-  gotoStep(1);
-
-  document.getElementById("wz-start")!.addEventListener("click", () => gotoStep(2));
-
-  const personaGroup = document.getElementById("wz-persona")!;
-  personaGroup.querySelectorAll<HTMLButtonElement>(".wz-tag").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      personaGroup.querySelectorAll(".wz-tag").forEach((b) => b.classList.remove("sel"));
-      btn.classList.add("sel");
-      wizPersona = btn.dataset.val as PetConfig["persona"];
-    });
-  });
-  document.getElementById("wz-to3")!.addEventListener("click", () => {
-    wizName = (document.getElementById("wz-name") as HTMLInputElement).value.trim() || "麦麦";
-    gotoStep(3);
-  });
-
-  document.getElementById("wz-test")!.addEventListener("click", async () => {
-    const key = (document.getElementById("wz-key") as HTMLInputElement).value.trim() || DEFAULT_CFG.hermesKey;
-    const msg = document.getElementById("wz-test-msg")!;
-    msg.textContent = "测试中…";
-    msg.className = "";
-    try {
-      const r = await fetch(HERMES_CHAT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model: HERMES_MODEL, messages: [{ role: "user", content: "ping" }] }),
-      });
-      if (r.ok || r.status === 400) {
-        msg.textContent = "✓ 连接成功！"; msg.className = "ok";
-      } else if (r.status === 401 || r.status === 403) {
-        msg.textContent = `✗ 密钥错误 (${r.status})`; msg.className = "err";
-      } else {
-        msg.textContent = `⚠ HTTP ${r.status}`; msg.className = "";
-      }
-    } catch {
-      msg.textContent = "✗ 连不到 :8642（服务未启动）"; msg.className = "err";
-    }
-  });
-
-  document.getElementById("wz-to4")!.addEventListener("click", () => {
-    const key = (document.getElementById("wz-key") as HTMLInputElement).value.trim() || DEFAULT_CFG.hermesKey;
-    finalize(wizName, wizPersona, key);
-  });
-  document.getElementById("wz-skip3")!.addEventListener("click", () => {
-    finalize(wizName, wizPersona, DEFAULT_CFG.hermesKey);
-  });
-
-  document.getElementById("wz-finish")!.addEventListener("click", () => {
-    window.location.reload();
-  });
+function wzGotoStep(n: number) {
+  wzDots.forEach((d, i) => d.classList.toggle("active", i < n));
+  wzSteps.forEach((s, i) => s.classList.toggle("hidden", i + 1 !== n));
 }
+function wzFinalize(name: string, persona: PetConfig["persona"], key: string) {
+  // Preserve fields the wizard doesn't edit (feishuChatId / hermesSessionKey).
+  saveCfg({ ...cfg, petName: name, persona, hermesKey: key });
+  document.getElementById("wz-done-title")!.textContent = `${name}，准备好了！`;
+  wzGotoStep(4);
+}
+// settings=true → re-open as a settings panel (pre-filled, closable, skips welcome)
+function openWizard(settings: boolean) {
+  wizName = cfg.petName;
+  wizPersona = cfg.persona;
+  wzNameInput.value = settings ? cfg.petName : "";
+  wzKeyInput.value =
+    settings && cfg.hermesKey && cfg.hermesKey !== "change-me-local-dev" ? cfg.hermesKey : "";
+  wzPersonaGroup.querySelectorAll<HTMLElement>(".wz-tag").forEach((b) =>
+    b.classList.toggle("sel", b.dataset.val === cfg.persona),
+  );
+  wzTestMsg.textContent = "";
+  wzTestMsg.className = "";
+  wzCloseBtn.classList.toggle("hidden", !settings); // ✕ only in settings mode
+  wizardEl.classList.remove("hidden");
+  wzGotoStep(settings ? 2 : 1); // settings skips the welcome screen
+}
+
+document.getElementById("wz-start")!.addEventListener("click", () => wzGotoStep(2));
+wzPersonaGroup.querySelectorAll<HTMLButtonElement>(".wz-tag").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    wzPersonaGroup.querySelectorAll(".wz-tag").forEach((b) => b.classList.remove("sel"));
+    btn.classList.add("sel");
+    wizPersona = btn.dataset.val as PetConfig["persona"];
+  });
+});
+document.getElementById("wz-to3")!.addEventListener("click", () => {
+  wizName = wzNameInput.value.trim() || cfg.petName || "麦麦";
+  wzGotoStep(3);
+});
+document.getElementById("wz-test")!.addEventListener("click", async () => {
+  const key = wzKeyInput.value.trim() || cfg.hermesKey;
+  wzTestMsg.textContent = "测试中…";
+  wzTestMsg.className = "";
+  try {
+    const r = await fetch(HERMES_CHAT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: HERMES_MODEL, messages: [{ role: "user", content: "ping" }] }),
+    });
+    if (r.ok || r.status === 400) {
+      wzTestMsg.textContent = "✓ 连接成功！"; wzTestMsg.className = "ok";
+    } else if (r.status === 401 || r.status === 403) {
+      wzTestMsg.textContent = `✗ 密钥错误 (${r.status})`; wzTestMsg.className = "err";
+    } else {
+      wzTestMsg.textContent = `⚠ HTTP ${r.status}`; wzTestMsg.className = "";
+    }
+  } catch {
+    wzTestMsg.textContent = "✗ 连不上 AI 服务"; wzTestMsg.className = "err";
+  }
+});
+document.getElementById("wz-to4")!.addEventListener("click", () => {
+  wzFinalize(wizName, wizPersona, wzKeyInput.value.trim() || cfg.hermesKey);
+});
+document.getElementById("wz-skip3")!.addEventListener("click", () => {
+  wzFinalize(wizName, wizPersona, cfg.hermesKey); // keep existing key when skipping
+});
+document.getElementById("wz-finish")!.addEventListener("click", () => window.location.reload());
+wzCloseBtn.addEventListener("click", () => wizardEl.classList.add("hidden"));
+
+// Tray "设置…" → re-open the wizard as a settings panel.
+void listen("open-settings", () => openWizard(true));
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 if (isFirstRun) {
-  showWizard();
+  openWizard(false); // first launch → onboarding (tray "退出" still available to quit)
 } else {
   buildMenu();
   resolve(); // start on ambient (good) until the first poll arrives
