@@ -273,8 +273,21 @@ function showBubble(text: string, autoHideMs = 4000) {
 
 // ── Proactive: governed Hermes-generated nudges on (negative) state change ───
 const NEGATIVE = new Set(["angry", "eyestrain", "sick", "slacking"]);
-const proactiveDone = new Set<string>(); // state-keys already nudged today
-let proactiveDay = "";
+// Persisted so a restart doesn't re-nudge the same state again the same day.
+const PROACTIVE_KEY = "petProactive_v1";
+function loadProactive(): { day: string; done: string[] } {
+  try {
+    const r = localStorage.getItem(PROACTIVE_KEY);
+    if (r) return JSON.parse(r) as { day: string; done: string[] };
+  } catch { /* ignore */ }
+  return { day: "", done: [] };
+}
+const _pro = loadProactive();
+const proactiveDone = new Set<string>(_pro.done); // state-keys already nudged today
+let proactiveDay = _pro.day;
+function saveProactive() {
+  localStorage.setItem(PROACTIVE_KEY, JSON.stringify({ day: proactiveDay, done: [...proactiveDone] }));
+}
 function localDay(): string {
   const n = new Date();
   return `${n.getFullYear()}-${n.getMonth() + 1}-${n.getDate()}`;
@@ -290,11 +303,13 @@ function maybeProactive(state: string) {
   if (day !== proactiveDay) {
     proactiveDay = day;
     proactiveDone.clear(); // reset cooldowns on a new day
+    saveProactive();
   }
   if (isQuietHours()) return;
   if (NEGATIVE.has(state)) {
     if (proactiveDone.has(state)) return; // cooldown: already nudged this state today
     proactiveDone.add(state);
+    saveProactive();
     void proactiveNudge(state);
   } else {
     showBubble(STATE_LABEL[state] ?? state);
@@ -557,7 +572,7 @@ async function showStateReason() {
       screen?: { goalMet?: boolean };
     };
     const st = s.petState ?? lastState ?? "resting";
-    const beforeAfternoon = (new Date().getUTCHours() + 8) % 24 < 15;
+    const beforeAfternoon = new Date().getHours() < 15; // local time, not hardcoded UTC+8
     const why: Record<string, string> = {
       thriving: "运动、阅读、屏幕全达标，今天超棒！",
       good: beforeAfternoon ? "现在还没到下午 3 点，早上先不催你～" : "至少有一项达标了，还行。",
@@ -840,6 +855,13 @@ if (isFirstRun) {
 } else {
   buildMenu();
   resolve(); // start on ambient (good) until the first poll arrives
+  // Greet on launch so the pet feels alive immediately, even with no backend.
+  const GREET: Record<PetConfig["persona"], string> = {
+    tsundere: "哟，主人回来啦？我才没在等你呢～",
+    gentle: "你回来啦～今天也要好好照顾自己哦 🌷",
+    lazy: "唔…你来啦……我再眯一会儿 zzz",
+  };
+  setTimeout(() => showBubble(GREET[cfg.persona] ?? GREET.tsundere, 5000), 800);
   void pollScores();
   setInterval(() => void pollScores(), POLL_MS);
   void pollActivity();
