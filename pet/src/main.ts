@@ -79,7 +79,8 @@ const ACTIVITY = "http://localhost:4100/activity";
 const MIRROR = "http://localhost:4100/mirror";
 const ACTIVITY_POLL_MS = 2000;
 const ACTIVITY_WINDOW_MS = 8000;
-const WORKBENCH_URL = import.meta.env.VITE_WORKBENCH_URL || "http://localhost:3002/";
+const WORKBENCH_URL =
+  import.meta.env.VITE_WORKBENCH_URL || "https://lapiko12138-spec.github.io/momo-home/";
 const FEISHU_BOT_URL = cfg.feishuChatId
   ? `https://applink.feishu.cn/client/chat/open?openChatId=${cfg.feishuChatId}`
   : "";
@@ -331,6 +332,7 @@ async function proactiveNudge(state: string) {
 let lastState: string | undefined;
 let lastAchievements: string[] = [];
 let primed = false;
+let anomalyShown = false; // true while petState is invalid → play "alert" once, not every poll
 
 async function pollScores() {
   let data: { petState?: unknown; achievements?: unknown } = {};
@@ -344,9 +346,13 @@ async function pollScores() {
 
   const s = data.petState;
   if (typeof s !== "string" || !(s in MAP.petStateToRow)) {
-    playOnce("alert"); // data anomaly: invalid/unknown petState
+    if (!anomalyShown) {
+      anomalyShown = true;
+      playOnce("alert"); // data anomaly: play once on transition, not every 5s poll
+    }
     return;
   }
+  anomalyShown = false; // valid data again → re-arm the anomaly alert
 
   const ach = Array.isArray(data.achievements)
     ? (data.achievements as string[])
@@ -507,7 +513,7 @@ async function askHermes(question: string) {
           continue;
         }
         setThinking(false);
-        showBubble(`Hermes 出错了（HTTP ${res.status}）`, 6000);
+        showBubble("我有点卡壳了，待会儿再试试～", 6000);
         return;
       }
       setThinking(false);
@@ -534,7 +540,7 @@ async function askHermes(question: string) {
         continue;
       }
       setThinking(false);
-      showBubble("连不上 Hermes —— :8642 的 API server 开了吗？", 6000);
+      showBubble("呜…我现在连不上自己的脑子，待会儿再聊好吗 🥺", 6000);
       return;
     }
   }
@@ -565,7 +571,7 @@ async function showStateReason() {
     const flags = `运动${f(s.exercise?.goalMet)} 阅读${f(s.reading?.goalMet)} 屏幕${f(s.screen?.goalMet)}`;
     showBubble(`我现在：${st}\n${why[st] ?? ""}\n（${flags}）`, 8000);
   } catch {
-    showBubble("读不到状态数据（:4100 没开？）", 6000);
+    showBubble("我现在看不到你今天的数据耶，待会儿再看～", 6000);
   }
 }
 
@@ -574,7 +580,7 @@ const MENU_ITEMS: { icon: string; short: string; label: string; run: () => void 
   { icon: "💬", short: "聊聊", label: "随便聊聊", run: () => { chatForm.classList.remove("hidden"); chatInput.focus(); } },
   ...(FEISHU_BOT_URL ? [{ icon: "🤖", short: "飞书", label: "在飞书找麦麦", run: () => openUrl(FEISHU_BOT_URL) }] : []),
   { icon: "🐱", short: "状态", label: "我现在啥状态", run: showStateReason },
-  { icon: "🛠️", short: "工作台", label: "打开工作台", run: () => openUrl(WORKBENCH_URL) },
+  { icon: "🏠", short: "主页", label: "打开主页", run: () => openUrl(WORKBENCH_URL) },
 ];
 
 function buildMenu() {
