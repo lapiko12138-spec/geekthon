@@ -168,6 +168,21 @@ body {
   overflow: hidden;
 }
 
+.wz-close {
+  position: absolute;
+  top: 8px;
+  right: 11px;
+  z-index: 1;
+  background: none;
+  border: none;
+  color: #d9a7bd;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.wz-close:hover { color: #e05080; }
+
 .wz-dots {
   display: flex;
   gap: 6px;
